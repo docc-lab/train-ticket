@@ -31,7 +31,7 @@ import static org.springframework.http.ResponseEntity.ok;
 public class BasicController {
 
     @Autowired
-    BasicService service;
+    private BasicService service;
 
     private static final int BURST_REQUESTS_PER_SEC = 5;    // Bursty load size in rqs
     private static final int BURST_DURATION_SECONDS = 10;   // Duration of one burst wave
@@ -45,7 +45,7 @@ public class BasicController {
     private static final Logger logger = LoggerFactory.getLogger(BasicController.class);
 
     @Autowired
-    public BasicController(BasicService service) {
+    public BasicController() {
         logger.info("Initializing BasicController - Burst Config: {} requests/sec for {} seconds, repeating every {} seconds",
                    BURST_REQUESTS_PER_SEC, BURST_DURATION_SECONDS, BURSTY_PERIOD_SECONDS);
         this.service = service;
@@ -103,8 +103,8 @@ public class BasicController {
         return ok(service.queryForStationId(stationName, headers));
     }
 
-    private void generateBurstLoad(String orderId, String loginId, HttpHeaders headers) {
-        LOGGER.info("[generateBurstLoad][Starting burst: {} requests/sec for {} seconds. Next burst in {} seconds]", 
+    private void generateBurstLoad(Travel info, HttpHeaders headers) {
+        logger.info("[generateBurstLoad][Starting burst: {} requests/sec for {} seconds. Next burst in {} seconds]", 
                    BURST_REQUESTS_PER_SEC, BURST_DURATION_SECONDS, BURSTY_PERIOD_SECONDS);
 
         // Schedule fixed-rate bursts for the duration
@@ -113,9 +113,9 @@ public class BasicController {
             for (int i = 0; i < BURST_REQUESTS_PER_SEC; i++) {
                 executorService.submit(() -> {
                     try {
-                        cancelService.cancelOrder(orderId, loginId, headers);
+                        service.queryForTravel(info, headers);
                     } catch (Exception e) {
-                        LOGGER.warn("[generateBurstLoad][Burst request failed][Error: {}]", e.getMessage());
+                        logger.warn("[generateBurstLoad][Burst request failed][Error: {}]", e.getMessage());
                     }
                 });
             }
@@ -124,14 +124,14 @@ public class BasicController {
         // Schedule the burst termination
         schedulerService.schedule(() -> {
             burstSchedule.cancel(false);
-            LOGGER.info("[generateBurstLoad][Burst completed][Next burst possible in {} seconds]", 
+            logger.info("[generateBurstLoad][Burst completed][Next burst possible in {} seconds]", 
                        BURSTY_PERIOD_SECONDS);
         }, BURST_DURATION_SECONDS, TimeUnit.SECONDS);
     }
 
     @PreDestroy
     public void shutdownExecutorServices() {
-        LOGGER.info("Shutting down executor services");
+        logger.info("Shutting down executor services");
         executorService.shutdown();
         schedulerService.shutdown();
         try {
@@ -145,7 +145,7 @@ public class BasicController {
             executorService.shutdownNow();
             schedulerService.shutdownNow();
             Thread.currentThread().interrupt();
-            LOGGER.error("Shutdown interrupted", e);
+            logger.error("Shutdown interrupted", e);
         }
     }
 

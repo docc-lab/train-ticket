@@ -173,10 +173,6 @@ public class TravelController {
         }
     }
 
-private void generateBurstLoad(TripInfo info, ) {
-
-}
-
 // helper funcs for bursty load generation
 private void generateBurstLoad(TripInfo info, HttpHeaders headers) {
     LOGGER.info("[generateBurstLoad][Starting burst: {} requests/sec for {} seconds. Next burst in {} seconds]", 

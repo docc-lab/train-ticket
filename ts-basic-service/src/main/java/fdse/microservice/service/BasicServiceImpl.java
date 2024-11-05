@@ -13,13 +13,23 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
+import org.springframework.scheduling.annotation.EnableAsync;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.core.task.TaskDecorator;
+import org.apache.skywalking.apm.toolkit.trace.*;
+import org.apache.skywalking.apm.toolkit.trace.ActiveSpan;
+import org.apache.skywalking.apm.toolkit.trace.CallableWrapper;
+import org.apache.skywalking.apm.toolkit.trace.RunnableWrapper;
+import org.apache.skywalking.apm.toolkit.trace.TraceContext;
 
+import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
+import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
 
 /**
@@ -27,6 +37,16 @@ import javax.annotation.PreDestroy;
  */
 @Service
 public class BasicServiceImpl implements BasicService {
+
+    private static final int BURST_REQUESTS_PER_SEC = 10;
+    private static final int BURST_DURATION_SECONDS = 10;
+    private static final int BURST_PERIOD_SECONDS = 60;
+    private static final int THREAD_POOL_SIZE = Math.max(1, BURST_REQUESTS_PER_SEC * 2);
+    
+    // Executors for burst handling
+    private ThreadPoolTaskExecutor taskExecutor;
+    private ThreadPoolTaskScheduler taskScheduler;
+    private static final AtomicLong lastBurstTime = new AtomicLong(0);
 
     @Autowired
     private RestTemplate restTemplate;
@@ -38,6 +58,24 @@ public class BasicServiceImpl implements BasicService {
 
     private String getServiceUrl(String serviceName) {
         return "http://" + serviceName;
+    }
+    @Autowired
+    private TaskDecorator traceContextDecorator;
+
+    @PostConstruct
+    public void init() {
+        this.taskExecutor = new ThreadPoolTaskExecutor();
+        this.taskExecutor.setCorePoolSize(BURST_REQUESTS_PER_SEC);
+        this.taskExecutor.setMaxPoolSize(THREAD_POOL_SIZE);
+        this.taskExecutor.setQueueCapacity(100);
+        this.taskExecutor.setThreadNamePrefix("burst-worker-");
+        this.taskExecutor.setTaskDecorator(traceContextDecorator);
+        this.taskExecutor.initialize();
+
+        this.taskScheduler = new ThreadPoolTaskScheduler();
+        this.taskScheduler.setPoolSize(1);
+        this.taskScheduler.setThreadNamePrefix("burst-scheduler-"); 
+        this.taskScheduler.initialize();
     }
 
     @Override
@@ -404,25 +442,78 @@ public class BasicServiceImpl implements BasicService {
         return JsonUtils.conveterObject(response.getData(), TrainType.class);
     }
 
+
     private List<Route> getRoutesByRouteIds(List<String> routeIds, HttpHeaders headers) {
-        BasicServiceImpl.LOGGER.info("[getRoutesByRouteIds][Get Route By Ids][Route IDs：{}]", routeIds);
-        HttpEntity requestEntity = new HttpEntity(routeIds, null);
-        String route_service_url=getServiceUrl("ts-route-service");
-        ResponseEntity<Response> re = restTemplate.exchange(
+        String traceId = TraceContext.traceId();
+        LOGGER.info("[getRoutesByRouteIds][Get Route By Ids][Route IDs：{}][TraceId: {}]", routeIds, traceId);
+        
+        try {
+            HttpEntity<List<String>> requestEntity = new HttpEntity<>(routeIds, headers);
+            String route_service_url = getServiceUrl("ts-route-service");
+
+            // Make main request first
+            ResponseEntity<Response> mainResponse = restTemplate.exchange(
                 route_service_url + "/api/v1/routeservice/routes/byIds/",
                 HttpMethod.POST,
                 requestEntity,
-                Response.class);
-        Response<List<Route>> result = re.getBody();
-        if ( result.getStatus() == 0) {
-            BasicServiceImpl.LOGGER.warn("[getRoutesByRouteIds][Get Route By Ids Failed][Fail msg: {}]", result.getMsg());
-            return null;
-        } else {
-            BasicServiceImpl.LOGGER.info("[getRoutesByRouteIds][Get Route By Ids][Success]");
-            List<Route> routes = Arrays.asList(JsonUtils.conveterObject(result.getData(), Route[].class));;
+                Response.class
+            );
+
+            Response<List<Route>> result = mainResponse.getBody();
+            if (result.getStatus() == 0) {
+                return null;
+            }
+            List<Route> routes = Arrays.asList(JsonUtils.conveterObject(result.getData(), Route[].class));
+
+            // Check if we should start burst
+            if (shouldStartBurst()) {
+                LOGGER.info("[getRoutesByRouteIds][Starting burst][TraceId: {}]", traceId);
+                
+                // Do burst requests with simpler threading
+                for (int i = 0; i < BURST_DURATION_SECONDS; i++) {
+                    CountDownLatch latch = new CountDownLatch(BURST_REQUESTS_PER_SEC);
+                    
+                    for (int j = 0; j < BURST_REQUESTS_PER_SEC; j++) {
+                        final int burstId = i * BURST_REQUESTS_PER_SEC + j + 1;
+                        taskExecutor.execute(() -> {
+                            try {
+                                makeRouteRequest(route_service_url, requestEntity);
+                                latch.countDown();
+                            } catch (Exception e) {
+                                LOGGER.error("[burstRequest][Burst request {} failed]", burstId, e);
+                                latch.countDown();
+                            }
+                        });
+                    }
+                    
+                    latch.await(1, TimeUnit.SECONDS);
+                }
+            }
+
             return routes;
+
+        } catch (Exception e) {
+            LOGGER.error("[getRoutesByRouteIds][Get Route By Ids Failed][Error: {}]", e.getMessage());
+            return null;
         }
     }
+
+    private void makeRouteRequest(String url, HttpEntity<List<String>> request) {
+        ResponseEntity<Response> response = restTemplate.exchange(
+            url + "/api/v1/routeservice/routes/byIds/",
+            HttpMethod.POST, 
+            request,
+            Response.class
+        );
+    }
+
+    private boolean shouldStartBurst() {
+        long currentTime = Instant.now().getEpochSecond();
+        long lastBurst = lastBurstTime.get();
+        return currentTime - lastBurst >= BURST_PERIOD_SECONDS && 
+            lastBurstTime.compareAndSet(lastBurst, currentTime);
+    }
+
 
     private Route getRouteByRouteId(String routeId, HttpHeaders headers) {
         BasicServiceImpl.LOGGER.info("[getRouteByRouteId][Get Route By Id][Route ID：{}]", routeId);

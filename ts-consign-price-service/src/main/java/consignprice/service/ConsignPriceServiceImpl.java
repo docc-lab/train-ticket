@@ -57,23 +57,28 @@ public class ConsignPriceServiceImpl implements ConsignPriceService {
     }
 
     @Override
+    @Transactional
     public Response createAndModifyPrice(ConsignPrice config, HttpHeaders headers) {
         ConsignPriceServiceImpl.LOGGER.info("[createAndModifyPrice][Create New Price Config]");
-        //update price
-        ConsignPrice originalConfig;
-        if (repository.findByIndex(0) != null) {
-            originalConfig = repository.findByIndex(0);
-        } else {
+        
+        // update price
+        ConsignPrice originalConfig = repository.findByIndex(0);
+        if (originalConfig == null) {
             originalConfig = new ConsignPrice();
+            originalConfig.setId(UUID.randomUUID().toString());
         }
-        originalConfig.setId(config.getId());
         originalConfig.setIndex(0);
         originalConfig.setInitialPrice(config.getInitialPrice());
         originalConfig.setInitialWeight(config.getInitialWeight());
         originalConfig.setWithinPrice(config.getWithinPrice());
         originalConfig.setBeyondPrice(config.getBeyondPrice());
-        repository.save(originalConfig);
-        return new Response<>(1, success, originalConfig);
+        try {
+            repository.save(originalConfig);
+            return new Response<>(1, success, originalConfig);
+        } catch (Exception e) {
+            LOGGER.error("Failed to save price config", e);
+            return new Response<>(0, "Failed to save price config", null);
+        }
     }
 
     @Override

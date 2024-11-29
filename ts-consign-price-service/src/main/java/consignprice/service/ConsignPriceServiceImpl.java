@@ -62,22 +62,26 @@ public class ConsignPriceServiceImpl implements ConsignPriceService {
         ConsignPriceServiceImpl.LOGGER.info("[createAndModifyPrice][Create New Price Config]");
         
         // update price
+    try {
+        // Try to find existing config
         ConsignPrice originalConfig = repository.findByIndex(0);
-        if (originalConfig == null) {
-            originalConfig = new ConsignPrice();
-            originalConfig.setId(UUID.randomUUID().toString());
-        }
-        originalConfig.setIndex(0);
-        originalConfig.setInitialPrice(config.getInitialPrice());
-        originalConfig.setInitialWeight(config.getInitialWeight());
-        originalConfig.setWithinPrice(config.getWithinPrice());
-        originalConfig.setBeyondPrice(config.getBeyondPrice());
-        try {
+        if (originalConfig != null) {
+            // Update existing record
+            originalConfig.setInitialPrice(config.getInitialPrice());
+            originalConfig.setInitialWeight(config.getInitialWeight());
+            originalConfig.setWithinPrice(config.getWithinPrice());
+            originalConfig.setBeyondPrice(config.getBeyondPrice());
             repository.save(originalConfig);
             return new Response<>(1, success, originalConfig);
+            } else {
+            // Create new record
+            config.setIndex(0); // Ensure index is 0
+            repository.save(config);
+            return new Response<>(1, success, config);
+            }
         } catch (Exception e) {
-            LOGGER.error("Failed to save price config", e);
-            return new Response<>(0, "Failed to save price config", null);
+            LOGGER.error("[createAndModifyPrice] Failed to create/update price config", e);
+            return new Response<>(0, "Failed to save price config: " + e.getMessage(), null);
         }
     }
 

@@ -22,15 +22,25 @@ public class InitData implements CommandLineRunner {
 
     @Override
     public void run(String... strings) throws Exception {
-        InitData.LOGGER.info("[InitData.run][Consign price service][Init data operation]");
-        ConsignPrice config = new ConsignPrice();
-        config.setId(UUID.randomUUID().toString());
-        config.setIndex(0);
-        config.setInitialPrice(8);
-        config.setInitialWeight(1);
-        config.setWithinPrice(2);
-        config.setBeyondPrice(4);
+        try {
+            InitData.LOGGER.info("[InitData.run][Consign price service][Init data operation]");
+            ConsignPrice config = new ConsignPrice();
+            config.setId(UUID.randomUUID().toString());
+            config.setIndex(0);
+            config.setInitialPrice(8);
+            config.setInitialWeight(1);
+            config.setWithinPrice(2);
+            config.setBeyondPrice(4);
 
-        service.createAndModifyPrice(config, null);
+            Response response = service.createAndModifyPrice(config, null);
+            if (response.getStatus() == 0) {
+                LOGGER.warn("[InitData.run] Failed to initialize price config: {}", response.getMessage());
+            } else {
+                LOGGER.info("[InitData.run] Successfully initialized/updated price config");
+            }
+        } catch (Exception e) {
+            // Log error but don't fail application startup
+            LOGGER.error("[InitData.run] Error during initialization", e);
+        }
     }
 }

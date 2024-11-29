@@ -7,6 +7,7 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.web.bind.annotation.*;
 import edu.fudan.common.entity.Seat;
+import edu.fudan.common.util.Response;
 import seat.service.SeatService;
 
 import javax.annotation.PreDestroy;
@@ -58,7 +59,7 @@ public class SeatController {
                    seatRequest.getTravelDate(), seatRequest.getTrainNumber(), seatRequest.getSeatType());
         
         try {
-            var response = seatService.distributeSeat(seatRequest, headers);
+            Response response = seatService.distributeSeat(seatRequest, headers);
 
             // Check if it's ready for new wave burst based on the bursty period
             long currentTime = Instant.now().getEpochSecond();
@@ -77,7 +78,7 @@ public class SeatController {
             return ok(response);
         } catch (Exception e) {
             LOGGER.error("[distributeSeat][Error in main request][Error: {}]", e.getMessage());
-            return ok();
+            return ok(new Response<>(1, "error", null));
         }
     }
 

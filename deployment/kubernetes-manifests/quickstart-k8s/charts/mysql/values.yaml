@@ -46,6 +46,17 @@ mysql:
       default_storage_engine=InnoDB
       max_connections=65535
 
+      connect_timeout=60
+      net_read_timeout=180
+      net_write_timeout=180
+      wait_timeout=3600
+      
+      innodb_buffer_pool_size=4G
+      innodb_buffer_pool_instances=4
+
+      max_allowed_packet=64M
+      interactive_timeout=3600
+
   livenessProbe:
     initialDelaySeconds: 30
     periodSeconds: 10

@@ -35,7 +35,7 @@ public class InitData implements CommandLineRunner {
 
             Response response = service.createAndModifyPrice(config, null);
             if (response.getStatus() == 0) {
-                LOGGER.warn("[InitData.run] Failed to initialize price config: {}", response.getMessage());
+                LOGGER.warn("[InitData.run] Failed to initialize price config: {}", response.getMsg());
             } else {
                 LOGGER.info("[InitData.run] Successfully initialized/updated price config");
             }

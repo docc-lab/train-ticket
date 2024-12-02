@@ -26,6 +26,8 @@ public interface OrderRepository extends JpaRepository<Order, String> {
 
     ArrayList<Order> findByTravelDateAndTrainNumber(String travelDate,String trainNumber);
 
+    Optional<Order> findByAccountIdAndId(String accountId, String id);
+
     @Override
     void deleteById(String id);
 

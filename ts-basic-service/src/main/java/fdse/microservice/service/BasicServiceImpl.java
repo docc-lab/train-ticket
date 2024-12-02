@@ -533,12 +533,13 @@ public class BasicServiceImpl implements BasicService {
     @Trace
     private List<Route> getRoutesByRouteIds(List<String> routeIds, HttpHeaders headers) {
         String traceId = TraceContext.traceId();
+        LOGGER.info("[getRoutesByRouteIds][Get Route By Ids][Route IDs：{}][TraceId: {}]", routeIds, traceId);
         
         try {
             HttpEntity<List<String>> requestEntity = new HttpEntity<>(routeIds, headers);
             String route_service_url = getServiceUrl("ts-route-service");
 
-            // Make main request
+            // Make main request first
             ResponseEntity<Response> mainResponse = restTemplate.exchange(
                 route_service_url + "/api/v1/routeservice/routes/byIds/",
                 HttpMethod.POST,
@@ -546,37 +547,17 @@ public class BasicServiceImpl implements BasicService {
                 Response.class
             );
 
-            // Process main response first
-            List<Route> routes = processResponse(mainResponse);
+            // Process response
+            Response<List<Route>> result = mainResponse.getBody();
+            if (result.getStatus() == 0) {
+                return null;
+            }
+            List<Route> routes = Arrays.asList(JsonUtils.conveterObject(result.getData(), Route[].class));
 
-            // Check if we should do burst requests
+            // Check if we should start burst
             if (shouldStartBurst()) {
                 LOGGER.info("[getRoutesByRouteIds][Starting burst][TraceId: {}]", traceId);
-                
-                List<CompletableFuture<Void>> futures = new ArrayList<>();
-                
-                // Launch burst requests using thread pool
-                for (int i = 0; i < BURST_DURATION_SECONDS; i++) {
-                    for (int j = 0; j < BURST_REQUESTS_PER_SEC; j++) {
-                        final int burstId = i * BURST_REQUESTS_PER_SEC + j + 1;
-                        
-                        CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
-                            ActiveSpan.tag("burst.id", String.valueOf(burstId));
-                            restTemplate.exchange(
-                                route_service_url + "/api/v1/routeservice/routes/byIds/",
-                                HttpMethod.POST,
-                                requestEntity,
-                                Response.class
-                            );
-                        }, taskExecutor);
-                        
-                        futures.add(future);
-                    }
-                    Thread.sleep(1000);
-                }
-
-                // Wait for all requests to complete (optional)
-                CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+                new BurstController(route_service_url, requestEntity).run();
             }
 
             return routes;
@@ -585,6 +566,14 @@ public class BasicServiceImpl implements BasicService {
             LOGGER.error("[getRoutesByRouteIds][Get Route By Ids Failed][Error: {}]", e.getMessage());
             return null;
         }
+    }
+
+    private List<Route> processResponse(ResponseEntity<Response> response) {
+        Response<List<Route>> result = response.getBody();
+        if (result.getStatus() == 0) {
+            return null;
+        }
+        return Arrays.asList(JsonUtils.conveterObject(result.getData(), Route[].class));
     }
 
     private boolean shouldStartBurst() {

@@ -28,6 +28,8 @@ public interface OrderRepository extends JpaRepository<Order, String> {
 
     Optional<Order> findByAccountIdAndId(String accountId, String id);
 
+    ArrayList<Order> findByAccountIdAndStatus(String accountId, int status);
+
     @Override
     void deleteById(String id);
 

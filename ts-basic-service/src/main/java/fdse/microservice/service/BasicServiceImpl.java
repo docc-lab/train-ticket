@@ -17,6 +17,10 @@ import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.stereotype.Service;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.core.task.TaskDecorator;
 import org.apache.skywalking.apm.toolkit.trace.*;
@@ -32,21 +36,32 @@ import java.util.concurrent.atomic.AtomicLong;
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
 
+import static org.springframework.http.ResponseEntity.ok;
+
 /**
  * @author fdse
  */
 @Service
 public class BasicServiceImpl implements BasicService {
 
-    private static final int BURST_REQUESTS_PER_SEC = 10;
-    private static final int BURST_DURATION_SECONDS = 10;
-    private static final int BURST_PERIOD_SECONDS = 60;
-    private static final int THREAD_POOL_SIZE = Math.max(1, BURST_REQUESTS_PER_SEC * 2);
+    private int BURST_REQUESTS_PER_SEC = 10;
+    private int BURST_DURATION_SECONDS = 10;
+    private int BURST_PERIOD_SECONDS = 60;
+    private int THREAD_POOL_SIZE = Math.max(1, BURST_REQUESTS_PER_SEC * 2);
     
     // Executors for burst handling
     private ThreadPoolTaskExecutor taskExecutor;
     private ThreadPoolTaskScheduler taskScheduler;
     private static final AtomicLong lastBurstTime = new AtomicLong(0);
+
+//    private ExecutorService executorService;
+//    private final ScheduledExecutorService schedulerService;
+//    private final AtomicLong lastBurstTime = new AtomicLong(0);
+//
+//    private int BURST_REQUESTS_PER_SEC_2 = 0;
+//    private int BURST_DURATION_SECONDS_2 = 0;
+//    private int BURSTY_PERIOD_SECONDS_2 = 0;
+//    private int THREAD_POOL_SIZE_2 = 0;
 
     @Autowired
     private RestTemplate restTemplate;
@@ -64,6 +79,23 @@ public class BasicServiceImpl implements BasicService {
 
     @PostConstruct
     public void init() {
+//        this.taskExecutor = new ThreadPoolTaskExecutor();
+//        this.taskExecutor.setCorePoolSize(BURST_REQUESTS_PER_SEC);
+//        this.taskExecutor.setMaxPoolSize(THREAD_POOL_SIZE);
+//        this.taskExecutor.setQueueCapacity(100);
+//        this.taskExecutor.setThreadNamePrefix("burst-worker-");
+//        this.taskExecutor.setTaskDecorator(traceContextDecorator);
+//        this.taskExecutor.initialize();
+//
+//        this.taskScheduler = new ThreadPoolTaskScheduler();
+//        this.taskScheduler.setPoolSize(1);
+//        this.taskScheduler.setThreadNamePrefix("burst-scheduler-");
+//        this.taskScheduler.initialize();
+
+        this.initExecutorAndScheduler();
+    }
+
+    private void initExecutorAndScheduler() {
         this.taskExecutor = new ThreadPoolTaskExecutor();
         this.taskExecutor.setCorePoolSize(BURST_REQUESTS_PER_SEC);
         this.taskExecutor.setMaxPoolSize(THREAD_POOL_SIZE);
@@ -74,8 +106,38 @@ public class BasicServiceImpl implements BasicService {
 
         this.taskScheduler = new ThreadPoolTaskScheduler();
         this.taskScheduler.setPoolSize(1);
-        this.taskScheduler.setThreadNamePrefix("burst-scheduler-"); 
+        this.taskScheduler.setThreadNamePrefix("burst-scheduler-");
         this.taskScheduler.initialize();
+    }
+
+    @GetMapping(path = "/welcome")
+    public String home(@RequestHeader HttpHeaders headers) {
+        return "Welcome to [ Basic Service ] !";
+    }
+
+    @GetMapping(path = "/getBurstParams")
+    public String burstParams(@RequestHeader HttpHeaders headers) {
+        return String.format(
+                "%d\n%d\n%d\n%d\n",
+                BURST_REQUESTS_PER_SEC,
+                BURST_DURATION_SECONDS,
+                BURST_PERIOD_SECONDS,
+                THREAD_POOL_SIZE
+        );
+    }
+
+    @PostMapping(path = "/setBurstParams")
+    public HttpEntity setBurstParams(@RequestBody List<Integer> params, @RequestHeader HttpHeaders headers) {
+        this.BURST_REQUESTS_PER_SEC = params.get(0);
+        this.BURST_DURATION_SECONDS = params.get(1);
+        this.BURST_PERIOD_SECONDS = params.get(2);
+        this.THREAD_POOL_SIZE = Math.max(1, BURST_REQUESTS_PER_SEC * 2);
+
+//        this.executorService = Executors.newFixedThreadPool(THREAD_POOL_SIZE_2);
+
+        this.initExecutorAndScheduler();
+
+        return ok(null);
     }
 
     @Override

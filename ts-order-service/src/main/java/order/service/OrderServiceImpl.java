@@ -90,8 +90,9 @@ public class OrderServiceImpl implements OrderService {
     @Override
     public Response create(Order order, HttpHeaders headers) {
         OrderServiceImpl.LOGGER.info("[create][Create Order][Ready to Create Order]");
-        ArrayList<Order> accountOrders = orderRepository.findByAccountId(order.getAccountId());
-        if (accountOrders.contains(order)) {
+
+        Optional<Order> matchingOrder = orderRepository.findByAccountIdAndId(order.getAccountId(), order.getId());
+        if (matchingOrder.isPresent()) {
             OrderServiceImpl.LOGGER.error("[create][Order Create Fail][Order already exists][OrderId: {}]", order.getId());
             return new Response<>(0, "Order already exist", null);
         } else {
@@ -100,6 +101,17 @@ public class OrderServiceImpl implements OrderService {
             OrderServiceImpl.LOGGER.info("[create][Order Create Success][Order Price][OrderId:{} , Price: {}]",order.getId(),order.getPrice());
             return new Response<>(1, success, order);
         }
+
+//        ArrayList<Order> accountOrders = orderRepository.findByAccountId(order.getAccountId());
+//        if (accountOrders.contains(order)) {
+//            OrderServiceImpl.LOGGER.error("[create][Order Create Fail][Order already exists][OrderId: {}]", order.getId());
+//            return new Response<>(0, "Order already exist", null);
+//        } else {
+//            order.setId(UUID.randomUUID().toString());
+//            order=orderRepository.save(order);
+//            OrderServiceImpl.LOGGER.info("[create][Order Create Success][Order Price][OrderId:{} , Price: {}]",order.getId(),order.getPrice());
+//            return new Response<>(1, success, order);
+//        }
     }
 
     @Override
@@ -463,26 +475,41 @@ public class OrderServiceImpl implements OrderService {
     @Override
     public Response checkSecurityAboutOrder(Date dateFrom, String accountId, HttpHeaders headers) {
         OrderSecurity result = new OrderSecurity();
-        ArrayList<Order> orders = orderRepository.findByAccountId(accountId);
-        int countOrderInOneHour = 0;
-        int countTotalValidOrder = 0;
-        Calendar ca = Calendar.getInstance();
-        ca.setTime(dateFrom);
-        ca.add(Calendar.HOUR_OF_DAY, -1);
-        dateFrom = ca.getTime();
-        for (Order order : orders) {
-            if (order.getStatus() == OrderStatus.NOTPAID.getCode() ||
-                    order.getStatus() == OrderStatus.PAID.getCode() ||
-                    order.getStatus() == OrderStatus.COLLECTED.getCode()) {
-                countTotalValidOrder += 1;
-            }
-            Date boughtDate = StringUtils.String2Date(order.getBoughtDate());
-            if (boughtDate.after(dateFrom)) {
-                countOrderInOneHour += 1;
-            }
-        }
-        result.setOrderNumInLastOneHour(countOrderInOneHour);
-        result.setOrderNumOfValidOrder(countTotalValidOrder);
+//        ArrayList<Order> orders = orderRepository.findByAccountId(accountId);
+//        int countOrderInOneHour = 0;
+//        int countTotalValidOrder = 0;
+//        Calendar ca = Calendar.getInstance();
+//        ca.setTime(dateFrom);
+//        ca.add(Calendar.HOUR_OF_DAY, -1);
+//        dateFrom = ca.getTime();
+//        for (Order order : orders) {
+//            if (order.getStatus() == OrderStatus.NOTPAID.getCode() ||
+//                    order.getStatus() == OrderStatus.PAID.getCode() ||
+//                    order.getStatus() == OrderStatus.COLLECTED.getCode()) {
+//                countTotalValidOrder += 1;
+//            }
+//            Date boughtDate = StringUtils.String2Date(order.getBoughtDate());
+//            if (boughtDate.after(dateFrom)) {
+//                countOrderInOneHour += 1;
+//            }
+//        }
+
+        ArrayList<Order> notPaidOrders = orderRepository
+                .findByAccountIdAndStatus(accountId,
+                        OrderStatus.NOTPAID.getCode());
+        ArrayList<Order> paidOrders = orderRepository
+                .findByAccountIdAndStatus(accountId,
+                        OrderStatus.PAID.getCode());
+        ArrayList<Order> collectedOrders = orderRepository
+                .findByAccountIdAndStatus(accountId,
+                        OrderStatus.COLLECTED.getCode());
+
+//        result.setOrderNumInLastOneHour(countOrderInOneHour);
+        result.setOrderNumInLastOneHour(1);
+//        result.setOrderNumOfValidOrder(countTotalValidOrder);
+        result.setOrderNumOfValidOrder(
+                notPaidOrders.size() + paidOrders.size() + collectedOrders.size()
+        );
         return new Response<>(1, "Check Security Success . ", result);
     }
 

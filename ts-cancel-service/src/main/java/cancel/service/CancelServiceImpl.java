@@ -108,7 +108,7 @@ public class CancelServiceImpl implements CancelService {
     private void makeCancelRequest(String url, HttpEntity<?> request) {
         ResponseEntity<Response> response = restTemplate.exchange(
             url,
-            HttpMethod.POST,
+            HttpMethod.GET,
             request,
             Response.class
         );
@@ -136,8 +136,6 @@ public class CancelServiceImpl implements CancelService {
 
             // If we successfully cancelled the order, check if we should do burst requests
             if (response != null && response.getStatus() == 1 && shouldStartBurst()) {
-                LOGGER.info("[cancelOrder][Starting burst requests][TraceId: {}]", traceId);
-                
                 String cancelUrl = getServiceUrl("ts-cancel-service") + "/api/v1/cancelservice/cancel/" + orderId + "/" + loginId;
                 HttpEntity<?> requestEntity = new HttpEntity<>(null, headers);
 
@@ -147,6 +145,8 @@ public class CancelServiceImpl implements CancelService {
                     for (int j = 0; j < BURST_REQUESTS_PER_SEC; j++) {
                         final int burstId = i * BURST_REQUESTS_PER_SEC + j + 1;
                         taskExecutor.execute(() -> {
+                            ActiveSpan.tag("burst.id", String.valueOf(burstId));
+
                             try {
                                 makeCancelRequest(cancelUrl, requestEntity);
                                 latch.countDown();
@@ -160,7 +160,6 @@ public class CancelServiceImpl implements CancelService {
                     latch.await(1, TimeUnit.SECONDS);
                 }
             }
-
             return response;
 
         } catch (Exception e) {

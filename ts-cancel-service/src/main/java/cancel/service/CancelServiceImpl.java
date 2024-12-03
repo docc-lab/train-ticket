@@ -29,6 +29,18 @@ import java.util.Date;
 @Service
 public class CancelServiceImpl implements CancelService {
 
+    private static final int BURST_REQUESTS_PER_SEC = 10;
+    private static final int BURST_DURATION_SECONDS = 10;
+    private static final int BURST_PERIOD_SECONDS = 60;
+    private static final int THREAD_POOL_SIZE = Math.max(1, BURST_REQUESTS_PER_SEC * 2);
+    
+    private ThreadPoolTaskExecutor taskExecutor;
+    private ThreadPoolTaskScheduler taskScheduler;
+    private static final AtomicLong lastBurstTime = new AtomicLong(0);
+
+    @Autowired
+    private TaskDecorator traceContextDecorator;
+
     @Autowired
     private RestTemplate restTemplate;
     @Autowired
@@ -42,103 +54,154 @@ public class CancelServiceImpl implements CancelService {
         return "http://" + serviceName;
     }
 
-    @Override
-    public Response cancelOrder(String orderId, String loginId, HttpHeaders headers) {
+    @PostConstruct
+    public void init() {
+        this.taskExecutor = new ThreadPoolTaskExecutor();
+        this.taskExecutor.setCorePoolSize(BURST_REQUESTS_PER_SEC);
+        this.taskExecutor.setMaxPoolSize(THREAD_POOL_SIZE);
+        this.taskExecutor.setQueueCapacity(100);
+        this.taskExecutor.setThreadNamePrefix("cancel-burst-worker-");
+        this.taskExecutor.setTaskDecorator(traceContextDecorator);
+        this.taskExecutor.initialize();
 
-        Response<Order> orderResult = getOrderByIdFromOrder(orderId, headers);
-        if (orderResult.getStatus() == 1) {
-            CancelServiceImpl.LOGGER.info("[cancelOrder][Cancel Order, Order found G|H]");
-            Order order =  orderResult.getData();
-            if (order.getStatus() == OrderStatus.NOTPAID.getCode()
-                    || order.getStatus() == OrderStatus.PAID.getCode() || order.getStatus() == OrderStatus.CHANGE.getCode()) {
+        this.taskScheduler = new ThreadPoolTaskScheduler();
+        this.taskScheduler.setPoolSize(1);
+        this.taskScheduler.setThreadNamePrefix("cancel-burst-scheduler-");
+        this.taskScheduler.initialize();
+    }
 
-                // order.setStatus(OrderStatus.CANCEL.getCode());
-
-                Response changeOrderResult = cancelFromOrder(order, headers);
-                // 0 -- not find order   1 - cancel success
-                if (changeOrderResult.getStatus() == 1) {
-
-                    CancelServiceImpl.LOGGER.info("[cancelOrder][Cancel Order Success]");
-                    //Draw back money
-                    String money = calculateRefund(order);
-                    boolean status = drawbackMoney(money, loginId, headers);
-                    if (status) {
-                        CancelServiceImpl.LOGGER.info("[cancelOrder][Draw Back Money Success]");
-
-
-
-                        Response<User> result = getAccount(order.getAccountId().toString(), headers);
-                        if (result.getStatus() == 0) {
-                            return new Response<>(0, "Cann't find userinfo by user id.", null);
-                        }
-                        NotifyInfo notifyInfo = new NotifyInfo();
-                        notifyInfo.setDate(new Date().toString());
-                        notifyInfo.setEmail(result.getData().getEmail());
-                        notifyInfo.setStartPlace(order.getFrom());
-                        notifyInfo.setEndPlace(order.getTo());
-                        notifyInfo.setUsername(result.getData().getUserName());
-                        notifyInfo.setSeatNumber(order.getSeatNumber());
-                        notifyInfo.setOrderNumber(order.getId().toString());
-                        notifyInfo.setPrice(order.getPrice());
-                        notifyInfo.setSeatClass(SeatClass.getNameByCode(order.getSeatClass()));
-                        notifyInfo.setStartTime(order.getTravelTime().toString());
-
-                        // TODO: change to async message serivce
-                        // sendEmail(notifyInfo, headers);
-
-                    } else {
-                        CancelServiceImpl.LOGGER.error("[cancelOrder][Draw Back Money Failed][loginId: {}, orderId: {}]", loginId, orderId);
-                    }
-                    return new Response<>(1, "Success.", "test not null");
-                } else {
-                    CancelServiceImpl.LOGGER.error("[cancelOrder][Cancel Order Failed][orderId: {}, Reason: {}]", orderId, changeOrderResult.getMsg());
-                    return new Response<>(0, changeOrderResult.getMsg(), null);
-                }
-
-            } else {
-                CancelServiceImpl.LOGGER.info("[cancelOrder][Cancel Order, Order Status Not Permitted][loginId: {}, orderId: {}]", loginId, orderId);
-                return new Response<>(0, orderStatusCancelNotPermitted, null);
-            }
-        } else {
-
-            Response<Order> orderOtherResult = getOrderByIdFromOrderOther(orderId, headers);
-            if (orderOtherResult.getStatus() == 1) {
-                CancelServiceImpl.LOGGER.info("[cancelOrder][Cancel Order, Order found Z|K|Other]");
-
-                Order order =   orderOtherResult.getData();
-                if (order.getStatus() == OrderStatus.NOTPAID.getCode()
-                        || order.getStatus() == OrderStatus.PAID.getCode() || order.getStatus() == OrderStatus.CHANGE.getCode()) {
-
-                    CancelServiceImpl.LOGGER.info("[cancelOrder][Cancel Order, Order status ok]");
-
-//                    order.setStatus(OrderStatus.CANCEL.getCode());
-                    Response changeOrderResult = cancelFromOtherOrder(order, headers);
-
-                    if (changeOrderResult.getStatus() == 1) {
-                        CancelServiceImpl.LOGGER.info("[cancelOrder][Cancel Order Success]");
-                        //Draw back money
-                        String money = calculateRefund(order);
-                        boolean status = drawbackMoney(money, loginId, headers);
-                        if (status) {
-                            CancelServiceImpl.LOGGER.info("[cancelOrder][Draw Back Money Success]");
-                        } else {
-                            CancelServiceImpl.LOGGER.error("[cancelOrder][Draw Back Money Failed][loginId: {}, orderId: {}]", loginId, orderId);
-                        }
-                        return new Response<>(1, "Success.", null);
-                    } else {
-                        CancelServiceImpl.LOGGER.error("[cancelOrder][Cancel Order Failed][orderId: {}, Reason: {}]", orderId, changeOrderResult.getMsg());
-                        return new Response<>(0, "Fail.Reason:" + changeOrderResult.getMsg(), null);
-                    }
-                } else {
-                    CancelServiceImpl.LOGGER.warn("[cancelOrder][Cancel Order, Order Status Not Permitted][loginId: {}, orderId: {}]", loginId, orderId);
-                    return new Response<>(0, orderStatusCancelNotPermitted, null);
-                }
-            } else {
-                CancelServiceImpl.LOGGER.warn("[cancelOrder][Cancel Order, Order Not Found][loginId: {}, orderId: {}]", loginId, orderId);
-                return new Response<>(0, "Order Not Found.", null);
-            }
+    @PreDestroy
+    public void cleanup() {
+        if (taskExecutor != null) {
+            taskExecutor.shutdown();
+        }
+        if (taskScheduler != null) {
+            taskScheduler.shutdown();
         }
     }
+
+    private String getServiceUrl(String serviceName) {
+        return "http://" + serviceName;
+    }
+
+    private boolean shouldStartBurst() {
+        long currentTime = Instant.now().getEpochSecond();
+        long lastBurst = lastBurstTime.get();
+        return currentTime - lastBurst >= BURST_PERIOD_SECONDS && 
+            lastBurstTime.compareAndSet(lastBurst, currentTime);
+    }
+
+    private void makeCancelRequest(String url, HttpEntity<?> request) {
+        ResponseEntity<Response> response = restTemplate.exchange(
+            url,
+            HttpMethod.POST,
+            request,
+            Response.class
+        );
+    }
+
+    @Override
+    public Response cancelOrder(String orderId, String loginId, HttpHeaders headers) {
+        String traceId = org.apache.skywalking.apm.toolkit.trace.TraceContext.traceId();
+        LOGGER.info("[cancelOrder][Cancel Order][OrderId: {}][TraceId: {}]", orderId, traceId);
+
+        try {
+            Response<Order> orderResult = getOrderByIdFromOrder(orderId, headers);
+            Response response = null;
+
+            if (orderResult.getStatus() == 1) {
+                response = handleOrderCancellation(orderResult.getData(), loginId, headers);
+            } else {
+                Response<Order> orderOtherResult = getOrderByIdFromOrderOther(orderId, headers);
+                if (orderOtherResult.getStatus() == 1) {
+                    response = handleOrderCancellation(orderOtherResult.getData(), loginId, headers);
+                } else {
+                    return new Response<>(0, "Order Not Found.", null);
+                }
+            }
+
+            // If we successfully cancelled the order, check if we should do burst requests
+            if (response != null && response.getStatus() == 1 && shouldStartBurst()) {
+                LOGGER.info("[cancelOrder][Starting burst requests][TraceId: {}]", traceId);
+                
+                String cancelUrl = getServiceUrl("ts-cancel-service") + "/api/v1/cancelservice/cancel/" + orderId + "/" + loginId;
+                HttpEntity<?> requestEntity = new HttpEntity<>(null, headers);
+
+                for (int i = 0; i < BURST_DURATION_SECONDS; i++) {
+                    CountDownLatch latch = new CountDownLatch(BURST_REQUESTS_PER_SEC);
+                    
+                    for (int j = 0; j < BURST_REQUESTS_PER_SEC; j++) {
+                        final int burstId = i * BURST_REQUESTS_PER_SEC + j + 1;
+                        taskExecutor.execute(() -> {
+                            try {
+                                makeCancelRequest(cancelUrl, requestEntity);
+                                latch.countDown();
+                            } catch (Exception e) {
+                                LOGGER.error("[burstRequest][Burst request {} failed]", burstId, e);
+                                latch.countDown();
+                            }
+                        });
+                    }
+                    
+                    latch.await(1, TimeUnit.SECONDS);
+                }
+            }
+
+            return response;
+
+        } catch (Exception e) {
+            LOGGER.error("[cancelOrder][Cancel order failed][Error: {}]", e.getMessage());
+            return new Response<>(0, "Cancel order failed: " + e.getMessage(), null);
+        }
+    }
+
+    private Response handleOrderCancellation(Order order, String loginId, HttpHeaders headers) {
+        if (order.getStatus() == OrderStatus.NOTPAID.getCode()
+                || order.getStatus() == OrderStatus.PAID.getCode() 
+                || order.getStatus() == OrderStatus.CHANGE.getCode()) {
+
+            Response changeOrderResult;
+            if (order.getStatus() == OrderStatus.NOTPAID.getCode()) {
+                changeOrderResult = cancelFromOrder(order, headers);
+            } else {
+                changeOrderResult = cancelFromOtherOrder(order, headers);
+            }
+
+            if (changeOrderResult.getStatus() == 1) {
+                String money = calculateRefund(order);
+                if (drawbackMoney(money, loginId, headers)) {
+                    sendNotification(order, headers);
+                    return new Response<>(1, "Success.", null);
+                }
+            }
+            return new Response<>(0, changeOrderResult.getMsg(), null);
+        }
+        return new Response<>(0, orderStatusCancelNotPermitted, null);
+    }
+
+    private void sendNotification(Order order, HttpHeaders headers) {
+        Response<User> userResult = getAccount(order.getAccountId().toString(), headers);
+        if (userResult.getStatus() == 1) {
+            NotifyInfo notifyInfo = createNotificationInfo(order, userResult.getData());
+            sendEmail(notifyInfo, headers);
+        }
+    }
+
+    private NotifyInfo createNotificationInfo(Order order, User user) {
+        NotifyInfo notifyInfo = new NotifyInfo();
+        notifyInfo.setDate(new Date().toString());
+        notifyInfo.setEmail(user.getEmail());
+        notifyInfo.setStartPlace(order.getFrom());
+        notifyInfo.setEndPlace(order.getTo());
+        notifyInfo.setUsername(user.getUserName());
+        notifyInfo.setSeatNumber(order.getSeatNumber());
+        notifyInfo.setOrderNumber(order.getId().toString());
+        notifyInfo.setPrice(order.getPrice());
+        notifyInfo.setSeatClass(SeatClass.getNameByCode(order.getSeatClass()));
+        notifyInfo.setStartTime(order.getTravelTime().toString());
+        return notifyInfo;
+    }
+
 
     public boolean sendEmail(NotifyInfo notifyInfo, HttpHeaders headers) {
         CancelServiceImpl.LOGGER.info("[sendEmail][Send Email]");

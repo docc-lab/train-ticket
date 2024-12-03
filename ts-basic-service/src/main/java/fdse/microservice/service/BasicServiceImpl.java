@@ -106,9 +106,9 @@ public class BasicServiceImpl implements BasicService {
     public String getBurstParams(@RequestHeader HttpHeaders headers) {
         return String.format(
                 "%d\n%d\n%d\n%d\n",
+                BURST_PERIOD_SECONDS,
                 BURST_REQUESTS_PER_SEC,
                 BURST_DURATION_SECONDS,
-                BURST_PERIOD_SECONDS,
                 THREAD_POOL_SIZE
         );
     }
@@ -559,8 +559,17 @@ public class BasicServiceImpl implements BasicService {
     private boolean shouldStartBurst() {
         long currentTime = Instant.now().getEpochSecond();
         long lastBurst = lastBurstTime.get();
-        return currentTime - lastBurst >= BURST_PERIOD_SECONDS && 
-            lastBurstTime.compareAndSet(lastBurst, currentTime);
+
+        boolean toReturn = currentTime - lastBurst >= BURST_PERIOD_SECONDS;
+
+        if (toReturn) {
+            lastBurstTime.set(currentTime);
+        }
+
+        return toReturn;
+
+//        return currentTime - lastBurst >= BURST_PERIOD_SECONDS &&
+//            lastBurstTime.compareAndSet(lastBurst, currentTime);
     }
 
 

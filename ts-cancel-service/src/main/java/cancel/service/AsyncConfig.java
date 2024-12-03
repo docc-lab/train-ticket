@@ -13,10 +13,11 @@ public class AsyncConfig {
     @Bean
     public TaskDecorator traceContextDecorator() {
         return runnable -> {
-            // Create a new span at the same level as the original entry span
-            // Instead of creating it as a child span
             String parentTraceId = TraceContext.traceId();
-            return RunnableWrapper.of(runnable); 
+            return RunnableWrapper.of(() -> {
+                ActiveSpan.tag("parent.traceId", parentTraceId);
+                runnable.run();
+            });
         };
     }
 }

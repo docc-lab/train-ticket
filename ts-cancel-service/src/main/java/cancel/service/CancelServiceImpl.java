@@ -98,10 +98,6 @@ public class CancelServiceImpl implements CancelService {
         }
     }
 
-    private String getServiceUrl(String serviceName) {
-        return "http://" + serviceName;
-    }
-
     private boolean shouldStartBurst() {
         long currentTime = Instant.now().getEpochSecond();
         long lastBurst = lastBurstTime.get();

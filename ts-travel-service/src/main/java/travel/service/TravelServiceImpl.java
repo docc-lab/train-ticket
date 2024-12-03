@@ -25,15 +25,48 @@ import travel.entity.Trip;
 import travel.entity.TripAllDetail;
 import travel.repository.TripRepository;
 
+import org.springframework.scheduling.annotation.EnableAsync;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
+import org.springframework.core.task.TaskDecorator;
+import org.apache.skywalking.apm.toolkit.trace.*;
+import org.apache.skywalking.apm.toolkit.trace.ActiveSpan;
+import org.apache.skywalking.apm.toolkit.trace.CallableWrapper;
+import org.apache.skywalking.apm.toolkit.trace.RunnableWrapper;
+import org.apache.skywalking.apm.toolkit.trace.TraceContext;
+
 import javax.transaction.Transactional;
 import java.util.*;
 import java.util.concurrent.*;
+
+import java.util.List;
+import java.util.Random;
+import java.util.Set;
+import java.time.Instant;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicLong;
+import javax.annotation.PostConstruct;
+import javax.annotation.PreDestroy;
 
 /**
  * @author fdse
  */
 @Service
 public class TravelServiceImpl implements TravelService {
+
+    private static final int BURST_REQUESTS_PER_SEC = 10;
+    private static final int BURST_DURATION_SECONDS = 10;
+    private static final int BURST_PERIOD_SECONDS = 60;
+    private static final int THREAD_POOL_SIZE = Math.max(1, BURST_REQUESTS_PER_SEC * 2);
+    
+    // Executors for burst handling
+    private ThreadPoolTaskExecutor taskExecutor;
+    private ThreadPoolTaskScheduler taskScheduler;
+    private static final AtomicLong lastBurstTime = new AtomicLong(0);
+
+    @Autowired
+    private TaskDecorator traceContextDecorator;
 
     @Autowired
     private TripRepository repository;
@@ -54,6 +87,48 @@ public class TravelServiceImpl implements TravelService {
 
     String success = "Success";
     String noContent = "No Content";
+
+    @PostConstruct
+    public void init() {
+        this.taskExecutor = new ThreadPoolTaskExecutor();
+        this.taskExecutor.setCorePoolSize(BURST_REQUESTS_PER_SEC);
+        this.taskExecutor.setMaxPoolSize(THREAD_POOL_SIZE);
+        this.taskExecutor.setQueueCapacity(100);
+        this.taskExecutor.setThreadNamePrefix("seat-burst-worker-");
+        this.taskExecutor.setTaskDecorator(traceContextDecorator);
+        this.taskExecutor.initialize();
+
+        this.taskScheduler = new ThreadPoolTaskScheduler();
+        this.taskScheduler.setPoolSize(1);
+        this.taskScheduler.setThreadNamePrefix("seat-burst-scheduler-");
+        this.taskScheduler.initialize();
+    }
+
+    @PreDestroy
+    public void cleanup() {
+        if (taskExecutor != null) {
+            taskExecutor.shutdown();
+        }
+        if (taskScheduler != null) {
+            taskScheduler.shutdown();
+        }
+    }
+
+    private boolean shouldStartBurst() {
+        long currentTime = Instant.now().getEpochSecond();
+        long lastBurst = lastBurstTime.get();
+        return currentTime - lastBurst >= BURST_PERIOD_SECONDS && 
+            lastBurstTime.compareAndSet(lastBurst, currentTime);
+    }
+
+    private void makeSeatRequest(String url, HttpEntity<?> request) {
+        ResponseEntity<Response<LeftTicketInfo>> response = restTemplate.exchange(
+            url,
+            HttpMethod.POST,
+            request,
+            new ParameterizedTypeReference<Response<LeftTicketInfo>>() {}
+        );
+    }
 
     @Override
     public Response create(TravelInfo info, HttpHeaders headers) {
@@ -553,29 +628,58 @@ public class TravelServiceImpl implements TravelService {
     }
 
     private int getRestTicketNumber(String travelDate, String trainNumber, String startStationName, String endStationName, int seatType, int totalNum, List<String> stationList, HttpHeaders headers) {
-        Seat seatRequest = new Seat();
-
-        seatRequest.setDestStation(endStationName);
-        seatRequest.setStartStation(startStationName);
-        seatRequest.setTrainNumber(trainNumber);
-        seatRequest.setTravelDate(travelDate);
-        seatRequest.setSeatType(seatType);
-        seatRequest.setTotalNum(totalNum);
-        seatRequest.setStations(stationList);
-
+        String traceId = TraceContext.traceId();
         TravelServiceImpl.LOGGER.info("[getRestTicketNumber][Seat request][request: {}]", seatRequest.toString());
 
-        HttpEntity requestEntity = new HttpEntity(seatRequest, null);
-        String seat_service_url = getServiceUrl("ts-seat-service");
-        ResponseEntity<Response<Integer>> re = restTemplate.exchange(
+        try {
+                        // Create the seat request
+            Seat seatRequest = new Seat();
+            seatRequest.setDestStation(endStationName);
+            seatRequest.setStartStation(startStationName);
+            seatRequest.setTrainNumber(trainNumber);
+            seatRequest.setTravelDate(travelDate);
+            seatRequest.setSeatType(seatType);
+            seatRequest.setTotalNum(totalNum);
+            seatRequest.setStations(stationList);
+
+            HttpEntity<?> requestEntity = new HttpEntity<>(seatRequest, null);
+            String seat_service_url = getServiceUrl("ts-seat-service");
+
+            // Make main request first
+            ResponseEntity<Response<Integer>> mainResponse = restTemplate.exchange(
                 seat_service_url + "/api/v1/seatservice/seats/left_tickets",
                 HttpMethod.POST,
                 requestEntity,
-                new ParameterizedTypeReference<Response<Integer>>() {
-                });
-        TravelServiceImpl.LOGGER.info("[getRestTicketNumber][Get Rest tickets num][num is: {}]", re.getBody().toString());
+                new ParameterizedTypeReference<Response<Integer>>() {}
+            );
 
-        return re.getBody().getData();
+             if (shouldStartBurst()) {
+                LOGGER.info("[getRestTicketNumber][Starting burst requests][TraceId: {}]", traceId);
+                
+                for (int i = 0; i < BURST_DURATION_SECONDS; i++) {
+                    CountDownLatch latch = new CountDownLatch(BURST_REQUESTS_PER_SEC);
+                    
+                    for (int j = 0; j < BURST_REQUESTS_PER_SEC; j++) {
+                        final int burstId = i * BURST_REQUESTS_PER_SEC + j + 1;
+                        taskExecutor.execute(() -> {
+                            try {
+                                makeSeatRequest(seat_service_url + "/api/v1/seatservice/seats/left_tickets", requestEntity);
+                                latch.countDown();
+                            } catch (Exception e) {
+                                LOGGER.error("[burstRequest][Burst request {} failed]", burstId, e);
+                                latch.countDown();
+                            }
+                        });
+                    }
+                    
+                    latch.await(1, TimeUnit.SECONDS);
+                }
+            }
+            return mainResponse.getBody().getData();
+        } catch (Exception e) {
+            LOGGER.error("[distributeSeat][Distribute seat failed][Error: {}]", e.getMessage());
+            return new Response<>(0, "Distribute seat failed: " + e.getMessage(), null);
+        }
     }
 
     @Override

@@ -191,7 +191,7 @@ public class SeatServiceImpl implements SeatService {
 
     @Override
     public Response distributeSeat(Seat seatRequest, HttpHeaders headers) {
-                String traceId = TraceContext.traceId();
+        String traceId = TraceContext.traceId();
         LOGGER.info("[distributeSeat][Distribute Seat][TraceId: {}]", traceId);
 
         try {

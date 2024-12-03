@@ -115,9 +115,9 @@ public class BasicServiceImpl implements BasicService {
 
     @Override
     public HttpEntity setBurstParams(@RequestBody List<Integer> params, @RequestHeader HttpHeaders headers) {
-        this.BURST_REQUESTS_PER_SEC = params.get(0);
-        this.BURST_DURATION_SECONDS = params.get(1);
-        this.BURST_PERIOD_SECONDS = params.get(2);
+        this.BURST_PERIOD_SECONDS = params.get(0);
+        this.BURST_REQUESTS_PER_SEC = params.get(1);
+        this.BURST_DURATION_SECONDS = params.get(2);
         this.THREAD_POOL_SIZE = Math.max(1, BURST_REQUESTS_PER_SEC * 2);
 
 //        this.executorService = Executors.newFixedThreadPool(THREAD_POOL_SIZE_2);

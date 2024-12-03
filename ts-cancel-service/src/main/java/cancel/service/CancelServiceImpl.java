@@ -51,7 +51,7 @@ public class CancelServiceImpl implements CancelService {
     private static final int BURST_DURATION_SECONDS = 10;
     private static final int BURST_PERIOD_SECONDS = 60;
     private static final int THREAD_POOL_SIZE = Math.max(1, BURST_REQUESTS_PER_SEC * 2);
-    
+
     private ThreadPoolTaskExecutor taskExecutor;
     private ThreadPoolTaskScheduler taskScheduler;
     private static final AtomicLong lastBurstTime = new AtomicLong(0);
@@ -141,12 +141,11 @@ public class CancelServiceImpl implements CancelService {
 
                 for (int i = 0; i < BURST_DURATION_SECONDS; i++) {
                     CountDownLatch latch = new CountDownLatch(BURST_REQUESTS_PER_SEC);
-                    
+
                     for (int j = 0; j < BURST_REQUESTS_PER_SEC; j++) {
                         final int burstId = i * BURST_REQUESTS_PER_SEC + j + 1;
                         taskExecutor.execute(() -> {
                             // ActiveSpan.tag("burst.id", String.valueOf(burstId));
-
                             try {
                                 makeCancelRequest(cancelUrl, requestEntity);
                                 latch.countDown();
@@ -156,7 +155,7 @@ public class CancelServiceImpl implements CancelService {
                             }
                         });
                     }
-                    
+
                     latch.await(1, TimeUnit.SECONDS);
                 }
             }

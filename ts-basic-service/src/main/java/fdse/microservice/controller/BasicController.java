@@ -44,7 +44,7 @@ public class BasicController {
         return service.getBurstParams(headers);
     }
 
-    @GetMapping(path = "/getBurstParams")
+    @PostMapping(path = "/setBurstParams")
     public HttpEntity setBurstParams(@RequestBody List<Integer> params, @RequestHeader HttpHeaders headers) {
         return service.setBurstParams(params, headers);
     }

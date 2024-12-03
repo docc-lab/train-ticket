@@ -263,7 +263,7 @@ public class PreserveServiceImpl implements PreserveService {
         return returnResponse;
     }
 
-    public Ticket dipatchSeat(String date, String tripId, String startStation, String endStataion, int seatType, int totalNum, List<String> stationList, HttpHeaders httpHeaders) {
+    public Ticket dipatchSeat(String date, String tripId, String startStation, String endStataion, int seatType, int totalNum, List<String> stationList, HttpHeaders headers) {
         Seat seatRequest = new Seat();
         seatRequest.setTravelDate(date);
         seatRequest.setTrainNumber(tripId);
@@ -273,17 +273,17 @@ public class PreserveServiceImpl implements PreserveService {
         seatRequest.setTotalNum(totalNum);
         seatRequest.setStations(stationList);
 
-        HttpEntity requestEntityTicket = new HttpEntity(seatRequest, httpHeaders);
+        HttpEntity<?> requestEntityTicket = TraceContextHelper.createRequestEntity(seatRequest, headers);
         String seat_service_url = getServiceUrl("ts-seat-service");
         ResponseEntity<Response<Ticket>> reTicket = restTemplate.exchange(
                 seat_service_url + "/api/v1/seatservice/seats",
                 HttpMethod.POST,
                 requestEntityTicket,
-                new ParameterizedTypeReference<Response<Ticket>>() {
-                });
+                new ParameterizedTypeReference<Response<Ticket>>() {});
 
         return reTicket.getBody().getData();
     }
+
 
     public boolean sendEmail(NotifyInfo notifyInfo, HttpHeaders httpHeaders) {
         try {
@@ -342,10 +342,10 @@ public class PreserveServiceImpl implements PreserveService {
         return reQueryForStationId.getBody().getData();
     }
 
-    private Response checkSecurity(String accountId, HttpHeaders httpHeaders) {
+    private Response checkSecurity(String accountId, HttpHeaders headers) {
         PreserveServiceImpl.LOGGER.info("[checkSecurity][Preserve Other Service][Check Account Security]");
 
-        HttpEntity requestCheckResult = new HttpEntity(httpHeaders);
+        HttpEntity<?> requestCheckResult = TraceContextHelper.createRequestEntity(null, headers);
         String security_service_url = getServiceUrl("ts-security-service");
         ResponseEntity<Response> reCheckResult = restTemplate.exchange(
                 security_service_url + "/api/v1/securityservice/securityConfigs/" + accountId,
@@ -357,56 +357,55 @@ public class PreserveServiceImpl implements PreserveService {
     }
 
 
-    private Response<TripAllDetail> getTripAllDetailInformation(TripAllDetailInfo gtdi, HttpHeaders httpHeaders) {
+
+    private Response<TripAllDetail> getTripAllDetailInformation(TripAllDetailInfo gtdi, HttpHeaders headers) {
         PreserveServiceImpl.LOGGER.info("[getTripAllDetailInformation][Preserve Other Service][Get Trip All Detail Information]");
 
-        HttpEntity requestGetTripAllDetailResult = new HttpEntity(gtdi, httpHeaders);
+        HttpEntity<?> requestGetTripAllDetailResult = TraceContextHelper.createRequestEntity(gtdi, headers);
         String travel_service_url = getServiceUrl("ts-travel-service");
         ResponseEntity<Response<TripAllDetail>> reGetTripAllDetailResult = restTemplate.exchange(
                 travel_service_url + "/api/v1/travelservice/trip_detail",
                 HttpMethod.POST,
                 requestGetTripAllDetailResult,
-                new ParameterizedTypeReference<Response<TripAllDetail>>() {
-                });
+                new ParameterizedTypeReference<Response<TripAllDetail>>() {});
 
         return reGetTripAllDetailResult.getBody();
     }
 
 
-    private Response<Contacts> getContactsById(String contactsId, HttpHeaders httpHeaders) {
+    private Response<Contacts> getContactsById(String contactsId, HttpHeaders headers) {
         PreserveServiceImpl.LOGGER.info("[getContactsById][Preserve Other Service][Get Contacts By Id is]");
 
-        HttpEntity requestGetContactsResult = new HttpEntity(httpHeaders);
+        HttpEntity<?> requestGetContactsResult = TraceContextHelper.createRequestEntity(null, headers);
         String contacts_service_url = getServiceUrl("ts-contacts-service");
         ResponseEntity<Response<Contacts>> reGetContactsResult = restTemplate.exchange(
                 contacts_service_url + "/api/v1/contactservice/contacts/" + contactsId,
                 HttpMethod.GET,
                 requestGetContactsResult,
-                new ParameterizedTypeReference<Response<Contacts>>() {
-                });
+                new ParameterizedTypeReference<Response<Contacts>>() {});
 
         return reGetContactsResult.getBody();
     }
 
-    private Response createOrder(Order coi, HttpHeaders httpHeaders) {
+
+    private Response createOrder(Order order, HttpHeaders headers) {
         PreserveServiceImpl.LOGGER.info("[createOrder][Preserve Service][create order]");
 
-        HttpEntity requestEntityCreateOrderResult = new HttpEntity(coi, httpHeaders);
+        HttpEntity<?> requestEntityCreateOrderResult = TraceContextHelper.createRequestEntity(order, headers);
         String order_service_url = getServiceUrl("ts-order-service");
         ResponseEntity<Response<Order>> reCreateOrderResult = restTemplate.exchange(
                 order_service_url + "/api/v1/orderservice/order",
                 HttpMethod.POST,
                 requestEntityCreateOrderResult,
-                new ParameterizedTypeReference<Response<Order>>() {
-                });
+                new ParameterizedTypeReference<Response<Order>>() {});
 
         return reCreateOrderResult.getBody();
     }
 
-    private Response createFoodOrder(FoodOrder afi, HttpHeaders httpHeaders) {
+    private Response createFoodOrder(FoodOrder foodOrder, HttpHeaders headers) {
         PreserveServiceImpl.LOGGER.info("[createFoodOrder][Preserve Service][Add Preserve food Order]");
 
-        HttpEntity requestEntityAddFoodOrderResult = new HttpEntity(afi, httpHeaders);
+        HttpEntity<?> requestEntityAddFoodOrderResult = TraceContextHelper.createRequestEntity(foodOrder, headers);
         String food_service_url = getServiceUrl("ts-food-service");
         ResponseEntity<Response> reAddFoodOrderResult = restTemplate.exchange(
                 food_service_url + "/api/v1/foodservice/orders",
@@ -417,10 +416,10 @@ public class PreserveServiceImpl implements PreserveService {
         return reAddFoodOrderResult.getBody();
     }
 
-    private Response createConsign(Consign cr, HttpHeaders httpHeaders) {
+    private Response createConsign(Consign consign, HttpHeaders headers) {
         PreserveServiceImpl.LOGGER.info("[createConsign][Preserve Service][Add Condign");
 
-        HttpEntity requestEntityResultForTravel = new HttpEntity(cr, httpHeaders);
+        HttpEntity<?> requestEntityResultForTravel = TraceContextHelper.createRequestEntity(consign, headers);
         String consign_service_url = getServiceUrl("ts-consign-service");
         ResponseEntity<Response> reResultForTravel = restTemplate.exchange(
                 consign_service_url + "/api/v1/consignservice/consigns",

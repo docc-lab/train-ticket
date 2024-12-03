@@ -121,68 +121,68 @@ public class TravelServiceImpl implements TravelService {
             lastBurstTime.compareAndSet(lastBurst, currentTime);
     }
 
-private void makeSeatRequest(String url, HttpEntity<?> request, int burstId) {
-    String currentTraceId = TraceContext.traceId();
-    try {
-        // Explicitly propagate trace context
-        HttpHeaders headers = new HttpHeaders();
-        headers.putAll(request.getHeaders());
-        headers.set("sw8", currentTraceId); // Skywalking trace context
-        
-        HttpEntity<?> requestWithTrace = new HttpEntity<>(request.getBody(), headers);
-        
-        ActiveSpan.tag("burst.id", String.valueOf(burstId));
-        ActiveSpan.tag("parent.traceId", currentTraceId);
-
-        ResponseEntity<Response<Integer>> response = restTemplate.exchange(
-            url,
-            HttpMethod.POST,
-            requestWithTrace,
-            new ParameterizedTypeReference<Response<Integer>>() {}
-        );
-        
-        if (response.getBody() != null) {
-            LOGGER.debug("[makeSeatRequest][Burst request success][BurstId: {}][TraceId: {}]", 
-                burstId, currentTraceId);
-        }
-    } catch (Exception e) {
-        LOGGER.error("[makeSeatRequest][Burst request failed][BurstId: {}][TraceId: {}][Error: {}]", 
-            burstId, currentTraceId, e.getMessage());
-        ActiveSpan.tag("error", "true");
-        ActiveSpan.log(e.getMessage());
-        throw e;
-    }
-}
-
-private void executeRestTicketBurst(String url, HttpEntity<?> request) {
-    String traceId = TraceContext.traceId();
-    LOGGER.info("[executeRestTicketBurst][Starting burst requests][TraceId: {}]", traceId);
-
-    for (int i = 0; i < BURST_DURATION_SECONDS; i++) {
-        CountDownLatch latch = new CountDownLatch(BURST_REQUESTS_PER_SEC);
-        
-        for (int j = 0; j < BURST_REQUESTS_PER_SEC; j++) {
-            final int burstId = i * BURST_REQUESTS_PER_SEC + j + 1;
-            taskExecutor.execute(() -> {
-                try {
-                    makeSeatRequest(url, request, burstId);
-                } finally {
-                    latch.countDown();
-                }
-            });
-        }
-        
+    private void makeSeatRequest(String url, HttpEntity<?> request, int burstId) {
+        String currentTraceId = TraceContext.traceId();
         try {
-            if (!latch.await(1, TimeUnit.SECONDS)) {
-                LOGGER.warn("[executeRestTicketBurst][Burst requests timeout][Second: {}][TraceId: {}]", i, traceId);
+            // Explicitly propagate trace context
+            HttpHeaders headers = new HttpHeaders();
+            headers.putAll(request.getHeaders());
+            headers.set("sw8", currentTraceId); // Skywalking trace context
+            
+            HttpEntity<?> requestWithTrace = new HttpEntity<>(request.getBody(), headers);
+            
+            ActiveSpan.tag("burst.id", String.valueOf(burstId));
+            ActiveSpan.tag("parent.traceId", currentTraceId);
+
+            ResponseEntity<Response<Integer>> response = restTemplate.exchange(
+                url,
+                HttpMethod.POST,
+                requestWithTrace,
+                new ParameterizedTypeReference<Response<Integer>>() {}
+            );
+            
+            if (response.getBody() != null) {
+                LOGGER.debug("[makeSeatRequest][Burst request success][BurstId: {}][TraceId: {}]", 
+                    burstId, currentTraceId);
             }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            LOGGER.error("[executeRestTicketBurst][Burst interrupted][TraceId: {}]", traceId);
-            break;
+        } catch (Exception e) {
+            LOGGER.error("[makeSeatRequest][Burst request failed][BurstId: {}][TraceId: {}][Error: {}]", 
+                burstId, currentTraceId, e.getMessage());
+            ActiveSpan.tag("error", "true");
+            ActiveSpan.tag("error.message", e.getMessage());
+            throw e;
         }
     }
-}
+
+    private void executeRestTicketBurst(String url, HttpEntity<?> request) {
+        String traceId = TraceContext.traceId();
+        LOGGER.info("[executeRestTicketBurst][Starting burst requests][TraceId: {}]", traceId);
+
+        for (int i = 0; i < BURST_DURATION_SECONDS; i++) {
+            CountDownLatch latch = new CountDownLatch(BURST_REQUESTS_PER_SEC);
+            
+            for (int j = 0; j < BURST_REQUESTS_PER_SEC; j++) {
+                final int burstId = i * BURST_REQUESTS_PER_SEC + j + 1;
+                taskExecutor.execute(() -> {
+                    try {
+                        makeSeatRequest(url, request, burstId);
+                    } finally {
+                        latch.countDown();
+                    }
+                });
+            }
+            
+            try {
+                if (!latch.await(1, TimeUnit.SECONDS)) {
+                    LOGGER.warn("[executeRestTicketBurst][Burst requests timeout][Second: {}][TraceId: {}]", i, traceId);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                LOGGER.error("[executeRestTicketBurst][Burst interrupted][TraceId: {}]", traceId);
+                break;
+            }
+        }
+    }
 
     @Override
     public Response create(TravelInfo info, HttpHeaders headers) {

@@ -22,7 +22,7 @@ public class AsyncConfig {
                     runnable.run();
                 } catch (Exception e) {
                     ActiveSpan.tag("error", "true");
-                    ActiveSpan.log(e.getMessage());
+                    ActiveSpan.tag("error.message", e.getMessage());
                     throw e;
                 }
             });

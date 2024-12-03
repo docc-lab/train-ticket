@@ -4,8 +4,6 @@ import edu.fudan.common.util.Response;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.cloud.client.ServiceInstance;
 import org.springframework.cloud.client.discovery.DiscoveryClient;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpEntity;
@@ -13,28 +11,26 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.client.RestTemplate;
 import edu.fudan.common.entity.*;
 
-import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.core.task.TaskDecorator;
-import org.apache.skywalking.apm.toolkit.trace.*;
-import org.apache.skywalking.apm.toolkit.trace.ActiveSpan;
-import org.apache.skywalking.apm.toolkit.trace.CallableWrapper;
-import org.apache.skywalking.apm.toolkit.trace.RunnableWrapper;
 import org.apache.skywalking.apm.toolkit.trace.TraceContext;
 
 import java.util.List;
 import java.util.Random;
 import java.util.Set;
 import java.time.Instant;
-import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
+
+import static org.springframework.http.ResponseEntity.ok;
 
 /**
  * @author fdse
@@ -42,10 +38,10 @@ import javax.annotation.PreDestroy;
 @Service
 public class SeatServiceImpl implements SeatService {
 
-    private static final int BURST_REQUESTS_PER_SEC = 10;
-    private static final int BURST_DURATION_SECONDS = 10;
-    private static final int BURST_PERIOD_SECONDS = 60;
-    private static final int THREAD_POOL_SIZE = Math.max(1, BURST_REQUESTS_PER_SEC * 2);
+    private int BURST_REQUESTS_PER_SEC = 10;
+    private int BURST_DURATION_SECONDS = 10;
+    private int BURST_PERIOD_SECONDS = 60;
+    private int THREAD_POOL_SIZE = Math.max(1, BURST_REQUESTS_PER_SEC * 2);
     
     // Executors for burst handling
     private ThreadPoolTaskExecutor taskExecutor;
@@ -69,6 +65,10 @@ public class SeatServiceImpl implements SeatService {
 
     @PostConstruct
     public void init() {
+        this.initExecutorAndScheduler();
+    }
+
+    private void initExecutorAndScheduler() {
         this.taskExecutor = new ThreadPoolTaskExecutor();
         this.taskExecutor.setCorePoolSize(BURST_REQUESTS_PER_SEC);
         this.taskExecutor.setMaxPoolSize(THREAD_POOL_SIZE);
@@ -83,6 +83,31 @@ public class SeatServiceImpl implements SeatService {
         this.taskScheduler.initialize();
     }
 
+    @Override
+    public String getBurstParams(@RequestHeader HttpHeaders headers) {
+        return String.format(
+                "%d\n%d\n%d\n%d\n",
+                BURST_PERIOD_SECONDS,
+                BURST_REQUESTS_PER_SEC,
+                BURST_DURATION_SECONDS,
+                THREAD_POOL_SIZE
+        );
+    }
+
+    @Override
+    public HttpEntity setBurstParams(@RequestBody List<Integer> params, @RequestHeader HttpHeaders headers) {
+        this.BURST_PERIOD_SECONDS = params.get(0);
+        this.BURST_REQUESTS_PER_SEC = params.get(1);
+        this.BURST_DURATION_SECONDS = params.get(2);
+        this.THREAD_POOL_SIZE = Math.max(1, BURST_REQUESTS_PER_SEC * 2);
+
+//        this.executorService = Executors.newFixedThreadPool(THREAD_POOL_SIZE_2);
+
+        this.initExecutorAndScheduler();
+
+        return ok(null);
+    }
+
     @PreDestroy
     public void cleanup() {
         if (taskExecutor != null) {
@@ -93,11 +118,27 @@ public class SeatServiceImpl implements SeatService {
         }
     }
 
+//    private boolean shouldStartBurst() {
+//        long currentTime = Instant.now().getEpochSecond();
+//        long lastBurst = lastBurstTime.get();
+//        return currentTime - lastBurst >= BURST_PERIOD_SECONDS &&
+//            lastBurstTime.compareAndSet(lastBurst, currentTime);
+//    }
+
     private boolean shouldStartBurst() {
         long currentTime = Instant.now().getEpochSecond();
         long lastBurst = lastBurstTime.get();
-        return currentTime - lastBurst >= BURST_PERIOD_SECONDS && 
-            lastBurstTime.compareAndSet(lastBurst, currentTime);
+
+        boolean toReturn = currentTime - lastBurst >= BURST_PERIOD_SECONDS;
+
+        if (toReturn) {
+            lastBurstTime.set(currentTime);
+        }
+
+        return toReturn;
+
+//        return currentTime - lastBurst >= BURST_PERIOD_SECONDS &&
+//            lastBurstTime.compareAndSet(lastBurst, currentTime);
     }
 
     private void makeOrderRequest(String url, HttpEntity<?> request) {

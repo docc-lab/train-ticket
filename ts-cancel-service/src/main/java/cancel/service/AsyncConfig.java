@@ -18,4 +18,5 @@ public class AsyncConfig {
             String parentTraceId = TraceContext.traceId();
             return RunnableWrapper.of(runnable); 
         };
+    }
 }

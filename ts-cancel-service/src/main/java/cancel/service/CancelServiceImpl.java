@@ -145,7 +145,7 @@ public class CancelServiceImpl implements CancelService {
                     for (int j = 0; j < BURST_REQUESTS_PER_SEC; j++) {
                         final int burstId = i * BURST_REQUESTS_PER_SEC + j + 1;
                         taskExecutor.execute(() -> {
-                            ActiveSpan.tag("burst.id", String.valueOf(burstId));
+                            // ActiveSpan.tag("burst.id", String.valueOf(burstId));
 
                             try {
                                 makeCancelRequest(cancelUrl, requestEntity);

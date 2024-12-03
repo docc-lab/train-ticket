@@ -27,7 +27,6 @@ import static org.springframework.http.ResponseEntity.ok;
  */
 @RestController
 @RequestMapping("/api/v1/basicservice")
-
 public class BasicController {
 
     @Autowired
@@ -61,7 +60,6 @@ public class BasicController {
 
     @PostMapping(value = "/basic/travel")
     public HttpEntity queryForTravel(@RequestBody Travel info, @RequestHeader HttpHeaders headers) {
-        // TravelResult
         logger.info("[queryForTravel][Query for travel][Travel: {}]", info.toString());
         // return ok(service.queryForTravel(info, headers));
         try {
@@ -91,14 +89,12 @@ public class BasicController {
 
     @PostMapping(value = "/basic/travels")
     public HttpEntity queryForTravels(@RequestBody List<Travel> infos, @RequestHeader HttpHeaders headers) {
-        // TravelResult
         logger.info("[queryForTravels][Query for travels][Travels: {}]", infos);
         return ok(service.queryForTravels(infos, headers));
     }
 
     @GetMapping(value = "/basic/{stationName}")
     public HttpEntity queryForStationId(@PathVariable String stationName, @RequestHeader HttpHeaders headers) {
-        // String id
         logger.info("[queryForStationId][Query for stationId by stationName][stationName: {}]", stationName);
         return ok(service.queryForStationId(stationName, headers));
     }

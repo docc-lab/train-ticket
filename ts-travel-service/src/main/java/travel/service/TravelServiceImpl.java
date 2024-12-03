@@ -681,50 +681,47 @@ private void executeRestTicketBurst(String url, HttpEntity<?> request) {
         return route1;
     }
 
-    @Service
-    public class TravelServiceImpl implements TravelService {
 
-        private int getRestTicketNumber(String travelDate, String trainNumber, String startStationName, 
-                String endStationName, int seatType, int totalNum, List<String> stationList, HttpHeaders headers) {
-            
-            String traceId = TraceContext.traceId();
-            LOGGER.info("[getRestTicketNumber][Start query][TraceId: {}]", traceId);
+    private int getRestTicketNumber(String travelDate, String trainNumber, String startStationName, 
+            String endStationName, int seatType, int totalNum, List<String> stationList, HttpHeaders headers) {
+        
+        String traceId = TraceContext.traceId();
+        LOGGER.info("[getRestTicketNumber][Start query][TraceId: {}]", traceId);
 
-            try {
-                // Create the seat request
-                Seat seatRequest = new Seat();
-                seatRequest.setDestStation(endStationName);
-                seatRequest.setStartStation(startStationName);
-                seatRequest.setTrainNumber(trainNumber);
-                seatRequest.setTravelDate(travelDate);
-                seatRequest.setSeatType(seatType);
-                seatRequest.setTotalNum(totalNum);
-                seatRequest.setStations(stationList);
+        try {
+            // Create the seat request
+            Seat seatRequest = new Seat();
+            seatRequest.setDestStation(endStationName);
+            seatRequest.setStartStation(startStationName);
+            seatRequest.setTrainNumber(trainNumber);
+            seatRequest.setTravelDate(travelDate);
+            seatRequest.setSeatType(seatType);
+            seatRequest.setTotalNum(totalNum);
+            seatRequest.setStations(stationList);
 
-                HttpEntity<?> requestEntity = new HttpEntity<>(seatRequest, headers);
-                String seat_service_url = getServiceUrl("ts-seat-service");
-                String url = seat_service_url + "/api/v1/seatservice/seats/left_tickets";
+            HttpEntity<?> requestEntity = new HttpEntity<>(seatRequest, headers);
+            String seat_service_url = getServiceUrl("ts-seat-service");
+            String url = seat_service_url + "/api/v1/seatservice/seats/left_tickets";
 
-                // Make main request with proper response type
-                ResponseEntity<Response<Integer>> mainResponse = restTemplate.exchange(
-                    url,
-                    HttpMethod.POST,
-                    requestEntity,
-                    new ParameterizedTypeReference<Response<Integer>>() {}
-                );
+            // Make main request with proper response type
+            ResponseEntity<Response<Integer>> mainResponse = restTemplate.exchange(
+                url,
+                HttpMethod.POST,
+                requestEntity,
+                new ParameterizedTypeReference<Response<Integer>>() {}
+            );
 
-                // Only do burst if main request succeeds and timing is right
-                if (mainResponse.getBody() != null && mainResponse.getBody().getStatus() == 1 
-                    && shouldStartBurst()) {
-                    executeRestTicketBurst(url, requestEntity);
-                }
-
-                return mainResponse.getBody() != null ? mainResponse.getBody().getData() : 0;
-
-            } catch (Exception e) {
-                LOGGER.error("[getRestTicketNumber][Query failed][Error: {}]", e.getMessage());
-                return 0;
+            // Only do burst if main request succeeds and timing is right
+            if (mainResponse.getBody() != null && mainResponse.getBody().getStatus() == 1 
+                && shouldStartBurst()) {
+                executeRestTicketBurst(url, requestEntity);
             }
+
+            return mainResponse.getBody() != null ? mainResponse.getBody().getData() : 0;
+
+        } catch (Exception e) {
+            LOGGER.error("[getRestTicketNumber][Query failed][Error: {}]", e.getMessage());
+            return 0;
         }
     }
 

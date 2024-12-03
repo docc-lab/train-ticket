@@ -13,20 +13,13 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
-import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.stereotype.Service;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.core.task.TaskDecorator;
-import org.apache.skywalking.apm.toolkit.trace.*;
-import org.apache.skywalking.apm.toolkit.trace.ActiveSpan;
-import org.apache.skywalking.apm.toolkit.trace.CallableWrapper;
-import org.apache.skywalking.apm.toolkit.trace.RunnableWrapper;
 import org.apache.skywalking.apm.toolkit.trace.TraceContext;
 
 import java.time.Instant;
@@ -34,7 +27,6 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 import javax.annotation.PostConstruct;
-import javax.annotation.PreDestroy;
 
 import static org.springframework.http.ResponseEntity.ok;
 
@@ -110,13 +102,8 @@ public class BasicServiceImpl implements BasicService {
         this.taskScheduler.initialize();
     }
 
-    @GetMapping(path = "/welcome")
-    public String home(@RequestHeader HttpHeaders headers) {
-        return "Welcome to [ Basic Service ] !";
-    }
-
-    @GetMapping(path = "/getBurstParams")
-    public String burstParams(@RequestHeader HttpHeaders headers) {
+    @Override
+    public String getBurstParams(@RequestHeader HttpHeaders headers) {
         return String.format(
                 "%d\n%d\n%d\n%d\n",
                 BURST_REQUESTS_PER_SEC,
@@ -126,7 +113,7 @@ public class BasicServiceImpl implements BasicService {
         );
     }
 
-    @PostMapping(path = "/setBurstParams")
+    @Override
     public HttpEntity setBurstParams(@RequestBody List<Integer> params, @RequestHeader HttpHeaders headers) {
         this.BURST_REQUESTS_PER_SEC = params.get(0);
         this.BURST_DURATION_SECONDS = params.get(1);

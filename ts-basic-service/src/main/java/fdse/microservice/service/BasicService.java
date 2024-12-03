@@ -3,7 +3,10 @@ package fdse.microservice.service;
 import edu.fudan.common.entity.Travel;
 import edu.fudan.common.util.Response;
 import edu.fudan.common.entity.*;
+import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 
 import java.util.List;
 
@@ -12,6 +15,10 @@ import java.util.List;
  * @date 2017/6/6.
  */
 public interface BasicService {
+
+    String getBurstParams(@RequestHeader HttpHeaders headers);
+
+    HttpEntity setBurstParams(@RequestBody List<Integer> params, @RequestHeader HttpHeaders headers);
 
     /**
      * query for travel with travel information

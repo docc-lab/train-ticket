@@ -121,23 +121,68 @@ public class TravelServiceImpl implements TravelService {
             lastBurstTime.compareAndSet(lastBurst, currentTime);
     }
 
-    private void makeSeatRequest(String url, HttpEntity<?> request) {
+private void makeSeatRequest(String url, HttpEntity<?> request, int burstId) {
+    String currentTraceId = TraceContext.traceId();
+    try {
+        // Explicitly propagate trace context
+        HttpHeaders headers = new HttpHeaders();
+        headers.putAll(request.getHeaders());
+        headers.set("sw8", currentTraceId); // Skywalking trace context
+        
+        HttpEntity<?> requestWithTrace = new HttpEntity<>(request.getBody(), headers);
+        
+        ActiveSpan.tag("burst.id", String.valueOf(burstId));
+        ActiveSpan.tag("parent.traceId", currentTraceId);
+
+        ResponseEntity<Response<Integer>> response = restTemplate.exchange(
+            url,
+            HttpMethod.POST,
+            requestWithTrace,
+            new ParameterizedTypeReference<Response<Integer>>() {}
+        );
+        
+        if (response.getBody() != null) {
+            LOGGER.debug("[makeSeatRequest][Burst request success][BurstId: {}][TraceId: {}]", 
+                burstId, currentTraceId);
+        }
+    } catch (Exception e) {
+        LOGGER.error("[makeSeatRequest][Burst request failed][BurstId: {}][TraceId: {}][Error: {}]", 
+            burstId, currentTraceId, e.getMessage());
+        ActiveSpan.tag("error", "true");
+        ActiveSpan.log(e.getMessage());
+        throw e;
+    }
+}
+
+private void executeRestTicketBurst(String url, HttpEntity<?> request) {
+    String traceId = TraceContext.traceId();
+    LOGGER.info("[executeRestTicketBurst][Starting burst requests][TraceId: {}]", traceId);
+
+    for (int i = 0; i < BURST_DURATION_SECONDS; i++) {
+        CountDownLatch latch = new CountDownLatch(BURST_REQUESTS_PER_SEC);
+        
+        for (int j = 0; j < BURST_REQUESTS_PER_SEC; j++) {
+            final int burstId = i * BURST_REQUESTS_PER_SEC + j + 1;
+            taskExecutor.execute(() -> {
+                try {
+                    makeSeatRequest(url, request, burstId);
+                } finally {
+                    latch.countDown();
+                }
+            });
+        }
+        
         try {
-            ResponseEntity<Response<Integer>> response = restTemplate.exchange(
-                url,
-                HttpMethod.POST,
-                request,
-                new ParameterizedTypeReference<Response<Integer>>() {}
-            );
-            // Just log response for burst requests
-            if (response.getBody() != null) {
-                LOGGER.debug("[makeSeatRequest][Burst request response][Status: {}]", 
-                    response.getBody().getStatus());
+            if (!latch.await(1, TimeUnit.SECONDS)) {
+                LOGGER.warn("[executeRestTicketBurst][Burst requests timeout][Second: {}][TraceId: {}]", i, traceId);
             }
-        } catch (Exception e) {
-            LOGGER.error("[makeSeatRequest][Burst request failed][Error: {}]", e.getMessage());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            LOGGER.error("[executeRestTicketBurst][Burst interrupted][TraceId: {}]", traceId);
+            break;
         }
     }
+}
 
     @Override
     public Response create(TravelInfo info, HttpHeaders headers) {
@@ -636,63 +681,50 @@ public class TravelServiceImpl implements TravelService {
         return route1;
     }
 
-    private int getRestTicketNumber(String travelDate, String trainNumber, String startStationName, String endStationName, int seatType, int totalNum, List<String> stationList, HttpHeaders headers) {
-        
-        String traceId = TraceContext.traceId();
-        LOGGER.info("[getRestTicketNumber][Start query][TraceId: {}]", traceId);
+    @Service
+    public class TravelServiceImpl implements TravelService {
 
-        try {
-            // Create the seat request
-            Seat seatRequest = new Seat();
-            seatRequest.setDestStation(endStationName);
-            seatRequest.setStartStation(startStationName);
-            seatRequest.setTrainNumber(trainNumber);
-            seatRequest.setTravelDate(travelDate);
-            seatRequest.setSeatType(seatType);
-            seatRequest.setTotalNum(totalNum);
-            seatRequest.setStations(stationList);
+        private int getRestTicketNumber(String travelDate, String trainNumber, String startStationName, 
+                String endStationName, int seatType, int totalNum, List<String> stationList, HttpHeaders headers) {
+            
+            String traceId = TraceContext.traceId();
+            LOGGER.info("[getRestTicketNumber][Start query][TraceId: {}]", traceId);
 
-            HttpEntity<?> requestEntity = new HttpEntity<>(seatRequest, headers);
-            String seat_service_url = getServiceUrl("ts-seat-service");
+            try {
+                // Create the seat request
+                Seat seatRequest = new Seat();
+                seatRequest.setDestStation(endStationName);
+                seatRequest.setStartStation(startStationName);
+                seatRequest.setTrainNumber(trainNumber);
+                seatRequest.setTravelDate(travelDate);
+                seatRequest.setSeatType(seatType);
+                seatRequest.setTotalNum(totalNum);
+                seatRequest.setStations(stationList);
 
-            // Make main request with proper response type
-            ResponseEntity<Response<Integer>> mainResponse = restTemplate.exchange(
-                seat_service_url + "/api/v1/seatservice/seats/left_tickets",
-                HttpMethod.POST,
-                requestEntity,
-                new ParameterizedTypeReference<Response<Integer>>() {}
-            );
+                HttpEntity<?> requestEntity = new HttpEntity<>(seatRequest, headers);
+                String seat_service_url = getServiceUrl("ts-seat-service");
+                String url = seat_service_url + "/api/v1/seatservice/seats/left_tickets";
 
-            // Only do burst if main request succeeds and timing is right
-            if (mainResponse.getBody() != null && mainResponse.getBody().getStatus() == 1 
-                && shouldStartBurst()) {
-                LOGGER.info("[getRestTicketNumber][Starting burst requests][TraceId: {}]", traceId);
-                
-                for (int i = 0; i < BURST_DURATION_SECONDS; i++) {
-                    CountDownLatch latch = new CountDownLatch(BURST_REQUESTS_PER_SEC);
-                    
-                    for (int j = 0; j < BURST_REQUESTS_PER_SEC; j++) {
-                        final int burstId = i * BURST_REQUESTS_PER_SEC + j + 1;
-                        taskExecutor.execute(() -> {
-                            try {
-                                ActiveSpan.tag("burst.id", String.valueOf(burstId));
-                                makeSeatRequest(seat_service_url + "/api/v1/seatservice/seats/left_tickets", 
-                                    requestEntity);
-                            } finally {
-                                latch.countDown();
-                            }
-                        });
-                    }
-                    
-                    latch.await(1, TimeUnit.SECONDS);
+                // Make main request with proper response type
+                ResponseEntity<Response<Integer>> mainResponse = restTemplate.exchange(
+                    url,
+                    HttpMethod.POST,
+                    requestEntity,
+                    new ParameterizedTypeReference<Response<Integer>>() {}
+                );
+
+                // Only do burst if main request succeeds and timing is right
+                if (mainResponse.getBody() != null && mainResponse.getBody().getStatus() == 1 
+                    && shouldStartBurst()) {
+                    executeRestTicketBurst(url, requestEntity);
                 }
+
+                return mainResponse.getBody() != null ? mainResponse.getBody().getData() : 0;
+
+            } catch (Exception e) {
+                LOGGER.error("[getRestTicketNumber][Query failed][Error: {}]", e.getMessage());
+                return 0;
             }
-
-            return mainResponse.getBody() != null ? mainResponse.getBody().getData() : 0;
-
-        } catch (Exception e) {
-            LOGGER.error("[getRestTicketNumber][Query failed][Error: {}]", e.getMessage());
-            return 0;
         }
     }
 

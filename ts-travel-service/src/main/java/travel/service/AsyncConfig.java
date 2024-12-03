@@ -15,8 +15,16 @@ public class AsyncConfig {
         return runnable -> {
             String parentTraceId = TraceContext.traceId();
             return RunnableWrapper.of(() -> {
-                ActiveSpan.tag("parent.traceId", parentTraceId);
-                runnable.run();
+                try {
+                    // Create new span with explicit parent reference
+                    ActiveSpan.tag("parent.traceId", parentTraceId);
+                    ActiveSpan.tag("cross_process.context", "burst-request");
+                    runnable.run();
+                } catch (Exception e) {
+                    ActiveSpan.tag("error", "true");
+                    ActiveSpan.log(e.getMessage());
+                    throw e;
+                }
             });
         };
     }

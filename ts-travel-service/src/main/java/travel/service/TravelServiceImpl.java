@@ -629,7 +629,7 @@ public class TravelServiceImpl implements TravelService {
 
     private int getRestTicketNumber(String travelDate, String trainNumber, String startStationName, String endStationName, int seatType, int totalNum, List<String> stationList, HttpHeaders headers) {
         String traceId = TraceContext.traceId();
-        TravelServiceImpl.LOGGER.info("[getRestTicketNumber][Seat request][request: {}]", seatRequest.toString());
+        LOGGER.info("[getRestTicketNumber][Get rest ticket number][TraceId: {}]", traceId);
 
         try {
                         // Create the seat request
@@ -678,7 +678,7 @@ public class TravelServiceImpl implements TravelService {
             return mainResponse.getBody().getData();
         } catch (Exception e) {
             LOGGER.error("[distributeSeat][Distribute seat failed][Error: {}]", e.getMessage());
-            return new Response<>(0, "Distribute seat failed: " + e.getMessage(), null);
+            return 0;
         }
     }
 

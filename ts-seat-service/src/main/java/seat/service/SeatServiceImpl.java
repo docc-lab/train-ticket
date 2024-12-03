@@ -16,15 +16,45 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 import edu.fudan.common.entity.*;
 
+import org.springframework.scheduling.annotation.EnableAsync;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
+import org.springframework.core.task.TaskDecorator;
+import org.apache.skywalking.apm.toolkit.trace.*;
+import org.apache.skywalking.apm.toolkit.trace.ActiveSpan;
+import org.apache.skywalking.apm.toolkit.trace.CallableWrapper;
+import org.apache.skywalking.apm.toolkit.trace.RunnableWrapper;
+import org.apache.skywalking.apm.toolkit.trace.TraceContext;
+
 import java.util.List;
 import java.util.Random;
 import java.util.Set;
+import java.time.Instant;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicLong;
+import javax.annotation.PostConstruct;
+import javax.annotation.PreDestroy;
 
 /**
  * @author fdse
  */
 @Service
 public class SeatServiceImpl implements SeatService {
+
+    private static final int BURST_REQUESTS_PER_SEC = 10;
+    private static final int BURST_DURATION_SECONDS = 10;
+    private static final int BURST_PERIOD_SECONDS = 60;
+    private static final int THREAD_POOL_SIZE = Math.max(1, BURST_REQUESTS_PER_SEC * 2);
+    
+    // Executors for burst handling
+    private ThreadPoolTaskExecutor taskExecutor;
+    private ThreadPoolTaskScheduler taskScheduler;
+    private static final AtomicLong lastBurstTime = new AtomicLong(0);
+
+    @Autowired
+    private TaskDecorator traceContextDecorator;
+
     @Autowired
     RestTemplate restTemplate;
 
@@ -37,8 +67,51 @@ public class SeatServiceImpl implements SeatService {
         return "http://" + serviceName;
     }
 
-    @Override
-    public Response distributeSeat(Seat seatRequest, HttpHeaders headers) {
+    @PostConstruct
+    public void init() {
+        this.taskExecutor = new ThreadPoolTaskExecutor();
+        this.taskExecutor.setCorePoolSize(BURST_REQUESTS_PER_SEC);
+        this.taskExecutor.setMaxPoolSize(THREAD_POOL_SIZE);
+        this.taskExecutor.setQueueCapacity(100);
+        this.taskExecutor.setThreadNamePrefix("seat-burst-worker-");
+        this.taskExecutor.setTaskDecorator(traceContextDecorator);
+        this.taskExecutor.initialize();
+
+        this.taskScheduler = new ThreadPoolTaskScheduler();
+        this.taskScheduler.setPoolSize(1);
+        this.taskScheduler.setThreadNamePrefix("seat-burst-scheduler-");
+        this.taskScheduler.initialize();
+    }
+
+    @PreDestroy
+    public void cleanup() {
+        if (taskExecutor != null) {
+            taskExecutor.shutdown();
+        }
+        if (taskScheduler != null) {
+            taskScheduler.shutdown();
+        }
+    }
+
+    private boolean shouldStartBurst() {
+        long currentTime = Instant.now().getEpochSecond();
+        long lastBurst = lastBurstTime.get();
+        return currentTime - lastBurst >= BURST_PERIOD_SECONDS && 
+            lastBurstTime.compareAndSet(lastBurst, currentTime);
+    }
+
+    private void makeOrderRequest(String url, HttpEntity<?> request) {
+        ResponseEntity<Response<LeftTicketInfo>> response = restTemplate.exchange(
+            url,
+            HttpMethod.POST,
+            request,
+            new ParameterizedTypeReference<Response<LeftTicketInfo>>() {}
+        );
+    }
+
+    // Helper method to process the original seat distribution logic
+    private Response processDistributeSeat(Seat seatRequest, HttpHeaders headers) {
+        // Original distributeSeat logic
         Response<Route> routeResult;
 
         LeftTicketInfo leftTicketInfo;
@@ -113,6 +186,53 @@ public class SeatServiceImpl implements SeatService {
         ticket.setSeatNo(seat);
         SeatServiceImpl.LOGGER.info("[distributeSeat][Assign new tickets][Use a new seat number][seat number:{}]", seat);
         return new Response<>(1, "Use a new seat number!", ticket);
+    }
+
+
+    @Override
+    public Response distributeSeat(Seat seatRequest, HttpHeaders headers) {
+                String traceId = TraceContext.traceId();
+        LOGGER.info("[distributeSeat][Distribute Seat][TraceId: {}]", traceId);
+
+        try {
+            Response response = processDistributeSeat(seatRequest, headers);
+
+            // If seat distribution was successful, check if we should do burst requests
+            if (response != null && response.getStatus() == 1 && shouldStartBurst()) {
+                String orderUrl;
+                if (seatRequest.getTrainNumber().startsWith("G") || seatRequest.getTrainNumber().startsWith("D")) {
+                    orderUrl = getServiceUrl("ts-order-service") + "/api/v1/orderservice/order/tickets";
+                } else {
+                    orderUrl = getServiceUrl("ts-order-other-service") + "/api/v1/orderOtherService/orderOther/tickets";
+                }
+
+                HttpEntity<?> requestEntity = new HttpEntity<>(seatRequest, headers);
+
+                for (int i = 0; i < BURST_DURATION_SECONDS; i++) {
+                    CountDownLatch latch = new CountDownLatch(BURST_REQUESTS_PER_SEC);
+
+                    for (int j = 0; j < BURST_REQUESTS_PER_SEC; j++) {
+                        final int burstId = i * BURST_REQUESTS_PER_SEC + j + 1;
+                        taskExecutor.execute(() -> {
+                            try {
+                                makeOrderRequest(orderUrl, requestEntity);
+                                latch.countDown();
+                            } catch (Exception e) {
+                                LOGGER.error("[burstRequest][Burst request {} failed]", burstId, e);
+                                latch.countDown();
+                            }
+                        });
+                    }
+
+                    latch.await(1, TimeUnit.SECONDS);
+                }
+            }
+            return response;
+
+        } catch (Exception e) {
+            LOGGER.error("[distributeSeat][Distribute seat failed][Error: {}]", e.getMessage());
+            return new Response<>(0, "Distribute seat failed: " + e.getMessage(), null);
+        }
     }
 
     private boolean isContained(Set<Ticket> soldTickets, int seat) {

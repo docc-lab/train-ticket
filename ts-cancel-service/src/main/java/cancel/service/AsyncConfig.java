@@ -1,4 +1,4 @@
-package fdse.microservice.service;
+package cancel.service;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;

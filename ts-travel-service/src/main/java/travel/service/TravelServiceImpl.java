@@ -726,48 +726,74 @@ public class TravelServiceImpl implements TravelService {
     }
 
 
-    private int getRestTicketNumber(String travelDate, String trainNumber, String startStationName, 
-            String endStationName, int seatType, int totalNum, List<String> stationList, HttpHeaders headers) {
-        
-        String traceId = TraceContext.traceId();
-        LOGGER.info("[getRestTicketNumber][Start query][TraceId: {}]", traceId);
+    private int getRestTicketNumber(String travelDate, String trainNumber, 
+            String startStationName, String endStationName, int seatType, 
+            int totalNum, List<String> stationList, HttpHeaders headers) {
+            
+        String parentTraceId = TraceContext.traceId();
+        LOGGER.info("[getRestTicketNumber][Start query][TraceId: {}]", parentTraceId);
 
-        try {
-            // Create the seat request
-            Seat seatRequest = new Seat();
-            seatRequest.setDestStation(endStationName);
-            seatRequest.setStartStation(startStationName);
-            seatRequest.setTrainNumber(trainNumber);
-            seatRequest.setTravelDate(travelDate);
-            seatRequest.setSeatType(seatType);
-            seatRequest.setTotalNum(totalNum);
-            seatRequest.setStations(stationList);
+        return TraceCrossThread.asyncFinish(() -> {
+            try {
+                // Create explicit span for the main operation
+                ActiveSpan.tag("operation", "get-rest-ticket");
+                ActiveSpan.tag("parent.traceId", parentTraceId);
+                ActiveSpan.tag("train.number", trainNumber);
+                ActiveSpan.tag("seat.type", String.valueOf(seatType));
 
-            HttpEntity<?> requestEntity = new HttpEntity<>(seatRequest, headers);
-            String seat_service_url = getServiceUrl("ts-seat-service");
-            String url = seat_service_url + "/api/v1/seatservice/seats/left_tickets";
+                // Create the seat request
+                Seat seatRequest = new Seat();
+                seatRequest.setDestStation(endStationName);
+                seatRequest.setStartStation(startStationName);
+                seatRequest.setTrainNumber(trainNumber);
+                seatRequest.setTravelDate(travelDate);
+                seatRequest.setSeatType(seatType);
+                seatRequest.setTotalNum(totalNum);
+                seatRequest.setStations(stationList);
 
-            // Make main request with proper response type
-            ResponseEntity<Response<Integer>> mainResponse = restTemplate.exchange(
-                url,
-                HttpMethod.POST,
-                requestEntity,
-                new ParameterizedTypeReference<Response<Integer>>() {}
-            );
+                // Add trace context to headers
+                HttpHeaders requestHeaders = new HttpHeaders();
+                if (headers != null) {
+                    requestHeaders.putAll(headers);
+                }
+                requestHeaders.set("sw8", parentTraceId);
 
-            // Only do burst if main request succeeds and timing is right
-            if (mainResponse.getBody() != null && mainResponse.getBody().getStatus() == 1 
-                && shouldStartBurst()) {
-                executeRestTicketBurst(url, requestEntity);
+                HttpEntity<?> requestEntity = new HttpEntity<>(seatRequest, requestHeaders);
+                String url = getServiceUrl("ts-seat-service") + "/api/v1/seatservice/seats/left_tickets";
+
+                // Make main request with proper response type
+                ResponseEntity<Response<Integer>> mainResponse = restTemplate.exchange(
+                    url,
+                    HttpMethod.POST,
+                    requestEntity,
+                    new ParameterizedTypeReference<Response<Integer>>() {}
+                );
+
+                // Only do burst if main request succeeds and timing is right
+                if (mainResponse.getBody() != null && mainResponse.getBody().getStatus() == 1 
+                    && shouldStartBurst()) {
+                    LOGGER.info("[getRestTicketNumber][Starting burst requests][TraceId: {}]", parentTraceId);
+                    executeRestTicketBurst(url, requestEntity);
+                }
+
+                if (mainResponse.getBody() != null) {
+                    LOGGER.debug("[getRestTicketNumber][Query success][TraceId: {}][Result: {}]", 
+                        parentTraceId, mainResponse.getBody().getData());
+                    return mainResponse.getBody().getData();
+                } else {
+                    LOGGER.warn("[getRestTicketNumber][Empty response][TraceId: {}]", parentTraceId);
+                    return 0;
+                }
+
+            } catch (Exception e) {
+                LOGGER.error("[getRestTicketNumber][Query failed][TraceId: {}][Error: {}]", 
+                    parentTraceId, e.getMessage());
+                ActiveSpan.tag("error", "true");
+                ActiveSpan.tag("error.message", e.getMessage());
+                return 0;
             }
-
-            return mainResponse.getBody() != null ? mainResponse.getBody().getData() : 0;
-
-        } catch (Exception e) {
-            LOGGER.error("[getRestTicketNumber][Query failed][Error: {}]", e.getMessage());
-            return 0;
-        }
-    }
+        });
+}
 
     @Override
     public Response adminQueryAll(HttpHeaders headers) {

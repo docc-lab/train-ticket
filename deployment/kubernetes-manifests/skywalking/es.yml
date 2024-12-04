@@ -67,12 +67,6 @@ spec:
           value: "5000"
         - name: indices.queries.cache.size
           value: "40%"
-        - name: index.merge.scheduler.max_thread_count
-          value: "8"
-        - name: index.merge.policy.floor_segment
-          value: "2mb"
-        - name: index.merge.policy.max_merge_at_once
-          value: "10"
         image: docker.elastic.co/elasticsearch/elasticsearch:7.1.0
         name: elasticsearch
         ports:

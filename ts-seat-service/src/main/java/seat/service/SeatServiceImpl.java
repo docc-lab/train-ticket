@@ -165,7 +165,6 @@ public class SeatServiceImpl implements SeatService {
         
         LOGGER.info("[seat][Received request][All Headers: {}][Selected TraceID: {}]", 
             headers, traceId);
-            
 
         try {
             //Distinguish G\D from other trains
@@ -175,10 +174,20 @@ public class SeatServiceImpl implements SeatService {
             if (trainNumber.startsWith("G") || trainNumber.startsWith("D")) {
                 LOGGER.info("[distributeSeat][TrainNumber start][G or D][TraceID: {}]", traceId);
 
-                // Add trace ID to downstream request
+                // Create carrier for downstream propagation
+                ContextCarrierRef carrier = new ContextCarrierRef();
+                Tracer.inject(carrier);
+
+                // Add trace ID and carrier items to downstream request
                 HttpHeaders orderHeaders = new HttpHeaders();
                 orderHeaders.set("sw8", traceId);
                 orderHeaders.set("sw8-correlation", traceId);
+
+                CarrierItemRef item = carrier.items();
+                while (item.hasNext()) {
+                    item = item.next();
+                    orderHeaders.set(item.getHeadKey(), item.getHeadValue());
+                }
 
                 HttpEntity<?> orderRequest = new HttpEntity<>(seatRequest, orderHeaders);
                 String order_service_url = getServiceUrl("ts-order-service");
@@ -199,10 +208,20 @@ public class SeatServiceImpl implements SeatService {
             } else {
                 LOGGER.info("[distributeSeat][TrainNumber start][Other Capital Except D and G][TraceID: {}]", traceId);
                 
-                // Add trace ID to downstream request
+                // Create carrier for downstream propagation
+                ContextCarrierRef carrier = new ContextCarrierRef();
+                Tracer.inject(carrier);
+
+                // Add trace ID and carrier items to downstream request
                 HttpHeaders orderHeaders = new HttpHeaders();
                 orderHeaders.set("sw8", traceId);
                 orderHeaders.set("sw8-correlation", traceId);
+
+                CarrierItemRef item = carrier.items();
+                while (item.hasNext()) {
+                    item = item.next();
+                    orderHeaders.set(item.getHeadKey(), item.getHeadValue());
+                }
 
                 HttpEntity<?> orderRequest = new HttpEntity<>(seatRequest, orderHeaders);
                 String order_other_service_url = getServiceUrl("ts-order-other-service");

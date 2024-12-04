@@ -59,12 +59,22 @@ spec:
           value: single-node
         - name: ES_JAVA_OPTS
           value: "-Xms512m -Xmx8g"
-        - name: indices.memory.index_buffer_size
-          value: "50%"
-        - name: thread_pool.write.queue_size 
+        - name: ES_THREAD_POOL_WRITE_QUEUE_SIZE
           value: "10000"
-        - name: indices.queries.cache.size
+        - name: ES_THREAD_POOL_BULK_QUEUE_SIZE
+          value: "5000"
+        - name: ES_INDICES_MEMORY_INDEX_BUFFER_SIZE
+          value: "50%"
+        - name: ES_INDICES_QUERIES_CACHE_SIZE
           value: "40%"
+        - name: ES_INDICES_RECOVERY_MAX_BYTES_PER_SEC
+          value: "100mb"
+        - name: ES_INDICES_BREAKER_REQUEST_LIMIT
+          value: "90%"
+        - name: ES_HTTP_MAX_CONTENT_LENGTH
+          value: "200mb"
+        - name: ES_BOOTSTRAP_MEMORY_LOCK
+          value: "true"
         image: docker.elastic.co/elasticsearch/elasticsearch:7.1.0
         name: elasticsearch
         ports:

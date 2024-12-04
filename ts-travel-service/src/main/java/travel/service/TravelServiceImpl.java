@@ -190,7 +190,6 @@ public class TravelServiceImpl implements TravelService {
                     
                     taskExecutor.execute(RunnableWrapper.of(() -> {
                         SpanRef burstRequestSpan = null;
-                        String requestTraceId = null;
 
                         String requestTraceId = TraceContext.traceId();
                         String requestSegmentId = TraceContext.segmentId();

@@ -172,34 +172,32 @@ public class TravelServiceImpl implements TravelService {
     }
 
     private void executeRestTicketBurst(String url, HttpEntity<?> request, SpanRef parentSpan) {
-        String currentTraceId = TraceContext.traceId();
-        // Create root context for burst operation
-        ContextSnapshotRef burstContextSnapshot = Tracer.capture();
+        final String rootTraceId = TraceContext.traceId();
         parentSpan.prepareForAsync(); // Keep parent span alive
 
         try {
             for (int i = 0; i < BURST_DURATION_SECONDS; i++) {
+                final int burstGroup = i;
                 long startTime = System.currentTimeMillis();
 
                 for (int j = 0; j < BURST_REQUESTS_PER_SEC; j++) {
                     final int burstId = i * BURST_REQUESTS_PER_SEC + j + 1;
-                    
-                    // Create new context snapshot for each request
-                    ContextSnapshotRef requestContextSnapshot = Tracer.capture();
+                    final int burstSequence = j;
                     
                     taskExecutor.execute(RunnableWrapper.of(() -> {
                         SpanRef burstRequestSpan = null;
+                        String requestTraceId = null;
                         try {
                             // Create isolated span for this request
                             burstRequestSpan = Tracer.createLocalSpan("burst.request");
-                            // Link to burst context
-                            Tracer.continued(requestContextSnapshot);
+                            requestTraceId = TraceContext.traceId();
                             
                             // Add correlation tags
                             burstRequestSpan.tag("burst.id", String.valueOf(burstId));
-                            burstRequestSpan.tag("parent.traceId", currentTraceId);
-                            burstRequestSpan.tag("burst.group", String.valueOf(i));
-                            burstRequestSpan.tag("burst.sequence", String.valueOf(j));
+                            burstRequestSpan.tag("root.traceId", rootTraceId);
+                            burstRequestSpan.tag("request.traceId", requestTraceId);
+                            burstRequestSpan.tag("burst.group", String.valueOf(burstGroup));
+                            burstRequestSpan.tag("burst.sequence", String.valueOf(burstSequence));
                             
                             makeSeatRequest(url, request, burstId);
                         } catch (Exception e) {

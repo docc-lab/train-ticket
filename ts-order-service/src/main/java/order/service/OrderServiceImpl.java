@@ -65,26 +65,41 @@ public class OrderServiceImpl implements OrderService {
     public Response getSoldTickets(Seat seatRequest, HttpHeaders headers) {
         String traceId = TraceContext.traceId();
         String segmentId = TraceContext.segmentId();
-        String sw8Header = headers.getFirst("sw8");
+        String parentTraceId = headers.getFirst("sw8-correlation-id");
         
-        LOGGER.info("[order][Processing ticket request][TraceID: {}][SegmentID: {}][Parent SW8: {}]",
-            traceId, segmentId, sw8Header);
+        LOGGER.info("[order][Processing ticket request][TraceID: {}][SegmentID: {}][ParentTraceID: {}]",
+            traceId, segmentId, parentTraceId);
 
-        ArrayList<Order> list = orderRepository.findByTravelDateAndTrainNumber(seatRequest.getTravelDate(),
+        try {
+            ArrayList<Order> list = orderRepository.findByTravelDateAndTrainNumber(
+                seatRequest.getTravelDate(),
                 seatRequest.getTrainNumber());
-        if (list != null && !list.isEmpty()) {
-            Set ticketSet = new HashSet();
-            for (Order tempOrder : list) {
-                ticketSet.add(new Ticket(Integer.parseInt(tempOrder.getSeatNumber()),
-                        tempOrder.getFrom(), tempOrder.getTo()));
+
+            LOGGER.info("[order][Found tickets][TraceID: {}][Count: {}]", 
+                traceId, list != null ? list.size() : 0);
+
+            if (list != null && !list.isEmpty()) {
+                Set<Ticket> ticketSet = new HashSet<>();
+                for (Order tempOrder : list) {
+                    ticketSet.add(new Ticket(
+                        Integer.parseInt(tempOrder.getSeatNumber()),
+                        tempOrder.getFrom(), 
+                        tempOrder.getTo()
+                    ));
+                }
+                LeftTicketInfo leftTicketInfo = new LeftTicketInfo();
+                leftTicketInfo.setSoldTickets(ticketSet);
+                LOGGER.info("[order][Processed tickets][TraceID: {}][TicketCount: {}]", 
+                    traceId, ticketSet.size());
+                return new Response<>(1, success, leftTicketInfo);
+            } else {
+                LOGGER.warn("[order][No tickets found][TraceID: {}][Date: {}][Train: {}]",
+                    traceId, seatRequest.getTravelDate(), seatRequest.getTrainNumber());
+                return new Response<>(0, "Order is Null.", null);
             }
-            LeftTicketInfo leftTicketInfo = new LeftTicketInfo();
-            leftTicketInfo.setSoldTickets(ticketSet);
-            OrderServiceImpl.LOGGER.info("[getSoldTickets][Left ticket info][info is: {}]", leftTicketInfo.toString());
-            return new Response<>(1, success, leftTicketInfo);
-        } else {
-            OrderServiceImpl.LOGGER.warn("[getSoldTickets][Seat][Left ticket info is empty][seat from date: {}, train number: {}]",seatRequest.getTravelDate(),seatRequest.getTrainNumber()); //warn级别，获取资源但资源为空
-            return new Response<>(0, "Order is Null.", null);
+        } catch (Exception e) {
+            LOGGER.error("[order][Processing failed][TraceID: {}][Error: {}]", traceId, e.getMessage());
+            return new Response<>(0, "Processing failed: " + e.getMessage(), null);
         }
     }
 

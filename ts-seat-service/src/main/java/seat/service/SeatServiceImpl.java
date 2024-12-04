@@ -194,13 +194,19 @@ public class SeatServiceImpl implements SeatService {
     public Response distributeSeat(Seat seatRequest, HttpHeaders headers) {
         String traceId = TraceContext.traceId();
         String segmentId = TraceContext.segmentId();
-        String sw8Header = headers.getFirst("sw8");
+        String parentTraceId = headers.getFirst("sw8-correlation-id");
 
-        LOGGER.info("[seat][Received request][TraceID: {}][SegmentID: {}][SW8 Header: {}]",
-            traceId, segmentId, sw8Header);
+        LOGGER.info("[seat][Received seat request][TraceID: {}][SegmentID: {}][Parent TraceID: {}]",
+            traceId, segmentId, parentTraceId);
 
         try {
             Response response = processDistributeSeat(seatRequest, headers);
+
+            // Log before burst processing
+            if (response != null && response.getStatus() == 1 && shouldStartBurst()) {
+                LOGGER.info("[seat][Starting burst processing][TraceID: {}][ParentTraceID: {}]",
+                    traceId, parentTraceId);
+            }
 
             // If seat distribution was successful, check if we should do burst requests
             if (response != null && response.getStatus() == 1 && shouldStartBurst()) {
@@ -215,27 +221,34 @@ public class SeatServiceImpl implements SeatService {
 
                 for (int i = 0; i < BURST_DURATION_SECONDS; i++) {
                     CountDownLatch latch = new CountDownLatch(BURST_REQUESTS_PER_SEC);
+                    final int burstGroup = i;
 
                     for (int j = 0; j < BURST_REQUESTS_PER_SEC; j++) {
                         final int burstId = i * BURST_REQUESTS_PER_SEC + j + 1;
-                        taskExecutor.execute(() -> {
+                        taskExecutor.execute(RunnableWrapper.of(() -> {
                             try {
+                                String workerTraceId = TraceContext.traceId();
+                                LOGGER.info("[seat][Burst worker started][Group: {}][BurstID: {}][WorkerTraceID: {}][ParentTraceID: {}]",
+                                    burstGroup, burstId, workerTraceId, parentTraceId);
                                 makeOrderRequest(orderUrl, requestEntity);
-                                latch.countDown();
+                                LOGGER.info("[seat][Burst worker completed][BurstID: {}]", burstId);
                             } catch (Exception e) {
-                                LOGGER.error("[burstRequest][Burst request {} failed]", burstId, e);
+                                LOGGER.error("[seat][Burst worker failed][BurstID: {}][Error: {}]", burstId, e.getMessage());
+                            } finally {
                                 latch.countDown();
                             }
-                        });
+                        }));
                     }
 
-                    latch.await(1, TimeUnit.SECONDS);
+                    if (!latch.await(1, TimeUnit.SECONDS)) {
+                        LOGGER.warn("[seat][Burst group timeout][Group: {}]", burstGroup);
+                    }
                 }
             }
             return response;
 
         } catch (Exception e) {
-            LOGGER.error("[distributeSeat][Distribute seat failed][Error: {}]", e.getMessage());
+            LOGGER.error("[seat][Distribution failed][TraceID: {}][Error: {}]", traceId, e.getMessage());
             return new Response<>(0, "Distribute seat failed: " + e.getMessage(), null);
         }
     }

@@ -63,8 +63,6 @@ spec:
           value: "50%"
         - name: thread_pool.write.queue_size 
           value: "10000"
-        - name: thread_pool.bulk.queue_size
-          value: "5000"
         - name: indices.queries.cache.size
           value: "40%"
         image: docker.elastic.co/elasticsearch/elasticsearch:7.1.0

@@ -20,6 +20,7 @@ import org.springframework.web.client.RestTemplate;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.cloud.circuitbreaker.resilience4j.Resilience4JCircuitBreakerFactory;
 
 import travel2.entity.AdminTrip;
 import travel2.entity.Trip;
@@ -38,8 +39,7 @@ import java.util.*;
 public class TravelServiceImpl implements TravelService {
 
     @Autowired
-    private CircuitBreakerFactory circuitBreakerFactory;
-
+    private Resilience4JCircuitBreakerFactory circuitBreakerFactory;
 
     @Autowired
     TripRepository repository;

@@ -150,13 +150,22 @@ public class SeatServiceImpl implements SeatService {
 
     @Override
     public Response distributeSeat(Seat seatRequest, HttpHeaders headers) {
-        // Extract trace ID from incoming request
+        // Extract trace ID from all incoming request
         String traceId = headers.getFirst("sw8");
+        if (traceId == null) traceId = headers.getFirst("sw8-correlation");
+        if (traceId == null) traceId = headers.getFirst("X-B3-TraceId");
         if (traceId == null) {
-            traceId = TraceContext.traceId();
+            String traceparent = headers.getFirst("traceparent");
+            if (traceparent != null) {
+                String[] parts = traceparent.split("-");
+                if (parts.length >= 2) traceId = parts[1];
+            }
         }
+        if (traceId == null) traceId = TraceContext.traceId();
         
-        LOGGER.info("[seat][Received request][TraceID: {}]", traceId);
+        LOGGER.info("[seat][Received request][All Headers: {}][Selected TraceID: {}]", 
+            headers, traceId);
+            
 
         try {
             //Distinguish G\D from other trains

@@ -166,45 +166,87 @@ public class TravelServiceImpl implements TravelService {
     }
 
     private void makeSeatRequest(String url, HttpEntity<?> request, int burstId) {
-        String currentTraceId = TraceContext.traceId();
-        
-        // Use existing headers or create new ones
-        HttpHeaders headers = new HttpHeaders();
-        if (request.getHeaders() != null) {
-            headers.putAll(request.getHeaders());
-        }
-        
-        // Ensure trace headers are set
-        headers.set("sw8", currentTraceId);
-        headers.set("sw8-correlation", currentTraceId);
-        
-        HttpEntity<?> requestWithTracing = new HttpEntity<>(
-            request.getBody(),
-            headers
-        );
-
-        LOGGER.info("[makeSeatRequest][Sending request][BurstID: {}][TraceID: {}]",
-            burstId, currentTraceId);
-
+        SpanRef seatRequestSpan = null;
         try {
-            restTemplate.exchange(
+            // Get current trace context before making the request
+            String currentTraceId = TraceContext.traceId();
+            String currentSegmentId = TraceContext.segmentId();
+
+            // Create exit span with proper references
+            seatRequestSpan = Tracer.createExitSpan("seat.request", "ts-seat-service");
+            seatRequestSpan.tag("burst.id", String.valueOf(burstId));
+            seatRequestSpan.tag("parent.traceId", currentTraceId);
+            seatRequestSpan.tag("parent.segmentId", currentSegmentId);
+
+            // Create carrier and inject trace context
+            ContextCarrierRef carrier = new ContextCarrierRef();
+            Tracer.inject(carrier);
+
+            // Build headers with trace context
+            HttpHeaders headers = new HttpHeaders();
+            if (request.getHeaders() != null) {
+                headers.putAll(request.getHeaders());
+            }
+
+            // Add critical trace headers
+            headers.set("sw8", currentTraceId); 
+            CarrierItemRef item = carrier.items();
+            while (item.hasNext()) {
+                item = item.next();
+                String key = item.getHeadKey();
+                String value = item.getHeadValue();
+                headers.set(key, value);
+                LOGGER.debug("[makeSeatRequest][Adding trace header][BurstID: {}][Key: {}][Value: {}]",
+                    burstId, key, value);
+            }
+
+            // Create request with enhanced headers
+            HttpEntity<?> requestWithContext = new HttpEntity<>(
+                request.getBody(),
+                headers
+            );
+
+            LOGGER.info("[makeSeatRequest][Sending request][BurstID: {}][TraceID: {}][SegmentID: {}]",
+                burstId, currentTraceId, currentSegmentId);
+
+            // Make the request with trace context
+            ResponseEntity<Response<Integer>> response = restTemplate.exchange(
                 url,
                 HttpMethod.POST,
-                requestWithTracing,
+                requestWithContext,
                 new ParameterizedTypeReference<Response<Integer>>() {}
             );
-            LOGGER.info("[makeSeatRequest][Request completed][BurstID: {}][TraceID: {}]",
-                burstId, currentTraceId);
+
+            LOGGER.debug("[makeSeatRequest][Request complete][BurstID: {}][Response: {}]",
+                burstId, response.getStatusCode());
+
         } catch (Exception e) {
-            LOGGER.error("[makeSeatRequest][Request failed][BurstID: {}][TraceID: {}][Error: {}]",
-                burstId, currentTraceId, e.getMessage());
+            LOGGER.error("[makeSeatRequest][Request failed][BurstID: {}][Error: {}]",
+                burstId, e.getMessage(), e);
+            if (seatRequestSpan != null) {
+                seatRequestSpan.log(e);
+                seatRequestSpan.tag("error", "true");
+                seatRequestSpan.tag("error.message", e.getMessage());
+            }
             throw e;
+        } finally {
+            if (seatRequestSpan != null) {
+                Tracer.stopSpan();
+            }
         }
     }
 
     private void executeRestTicketBurst(String url, HttpEntity<?> request, SpanRef parentSpan) {
         final String rootTraceId = TraceContext.traceId();
-        LOGGER.info("[burst][Starting burst requests][Root TraceID: {}]", rootTraceId);
+        final String rootSegmentId = TraceContext.segmentId();
+        final ContextSnapshotRef contextSnapshot = Tracer.capture();
+
+        // Create carrier for header propagation 
+        ContextCarrierRef carrier = new ContextCarrierRef();
+        Tracer.inject(carrier);
+
+        LOGGER.info("[burst][Starting burst requests][Root TraceID: {}][Root SegmentID: {}]", 
+            rootTraceId, rootSegmentId);
 
         try {
             for (int i = 0; i < BURST_DURATION_SECONDS; i++) {
@@ -222,8 +264,11 @@ public class TravelServiceImpl implements TravelService {
                     }
                     
                     // Add trace context to headers
-                    headers.set("sw8", rootTraceId);
-                    headers.set("sw8-correlation", rootTraceId);
+                    CarrierItemRef item = carrier.items();
+                    while (item.hasNext()) {
+                        item = item.next();
+                        headers.set(item.getHeadKey(), item.getHeadValue());
+                    }
 
                     // Create new request with trace context
                     final HttpEntity<?> requestWithContext = new HttpEntity<>(
@@ -231,25 +276,42 @@ public class TravelServiceImpl implements TravelService {
                         headers
                     );
                     
-                    taskExecutor.execute(() -> {
+                    taskExecutor.execute(RunnableWrapper.of(() -> {
+                        SpanRef workerSpan = null;
                         try {
-                            LOGGER.info("[burst][Worker executing][BurstID: {}][TraceID: {}]", 
-                                burstId, rootTraceId);
+                            // Continue parent context in worker thread
+                            Tracer.continued(contextSnapshot);
+                            
+                            // Create worker span
+                            workerSpan = Tracer.createLocalSpan("burst.worker");
+                            workerSpan.tag("burst.id", String.valueOf(burstId));
+                            workerSpan.tag("burst.group", String.valueOf(burstGroup));
+                            workerSpan.tag("parent.traceId", rootTraceId);
 
+                            String currentTraceId = TraceContext.traceId();
+                            LOGGER.info("[burst][Worker executing][BurstID: {}][CurrentTraceID: {}][ParentTraceID: {}]", 
+                                burstId, currentTraceId, rootTraceId);
+
+                            // Use request with context
                             makeSeatRequest(url, requestWithContext, burstId);
 
                         } catch (Exception e) {
-                            LOGGER.error("[burst][Worker failed][BurstID: {}][TraceID: {}][Error: {}]", 
-                                burstId, rootTraceId, e.getMessage());
+                            LOGGER.error("[burst][Worker failed][BurstID: {}][Error: {}]", burstId, e.getMessage());
+                            if (workerSpan != null) {
+                                workerSpan.log(e);
+                                workerSpan.tag("error", "true");
+                            }
                         } finally {
+                            if (workerSpan != null) {
+                                Tracer.stopSpan();
+                            }
                             groupLatch.countDown();
                         }
-                    });
+                    }));
                 }
 
                 if (!groupLatch.await(1, TimeUnit.SECONDS)) {
-                    LOGGER.warn("[burst][Group timeout][Group: {}][TraceID: {}]", 
-                        burstGroup, rootTraceId);
+                    LOGGER.warn("[burst][Group timeout][Group: {}]", burstGroup);
                 }
 
                 long elapsedTime = System.currentTimeMillis() - startTime;
@@ -258,8 +320,7 @@ public class TravelServiceImpl implements TravelService {
                 }
             }
         } catch (Exception e) {
-            LOGGER.error("[burst][Burst execution failed][TraceID: {}][Error: {}]", 
-                rootTraceId, e.getMessage());
+            LOGGER.error("[burst][Burst execution failed][Error: {}]", e.getMessage());
         }
     }
 

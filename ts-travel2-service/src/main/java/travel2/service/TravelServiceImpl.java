@@ -34,18 +34,6 @@ import java.util.*;
  * @author fdse
  */
 
-@Configuration
-public class Travel2ServiceConfiguration {
-
-    @Bean
-    public RestTemplate restTemplate() {
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(3000);  // 3 seconds
-        factory.setReadTimeout(5000);     // 5 seconds
-        return new RestTemplate(factory);
-    }
-}
-
 @Service
 public class TravelServiceImpl implements TravelService {
 

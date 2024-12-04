@@ -38,6 +38,10 @@ import java.util.*;
 public class TravelServiceImpl implements TravelService {
 
     @Autowired
+    private CircuitBreakerFactory circuitBreakerFactory;
+
+
+    @Autowired
     TripRepository repository;
 
     @Autowired
@@ -53,6 +57,22 @@ public class TravelServiceImpl implements TravelService {
 
     String success = "Success";
     String noCnontent = "No Content";
+
+    private ResponseEntity<Response> executeWithCircuitBreaker(String serviceName, String url, HttpMethod method, HttpEntity<?> request, Class<Response> responseType) {
+        CircuitBreaker circuitBreaker = circuitBreakerFactory.create(serviceName);
+        
+        return circuitBreaker.run(
+            () -> restTemplate.exchange(url, method, request, responseType),
+            throwable -> handleFailure(serviceName, throwable)
+        );
+    }
+
+    private ResponseEntity<Response> handleFailure(String serviceName, Throwable throwable) {
+        LOGGER.error("[CircuitBreaker][Service: {}][Error: {}]", serviceName, throwable.getMessage());
+        // Return fallback response or throw exception
+        throw new ServiceException("Service temporarily unavailable: " + serviceName);
+    }
+
 
     @Override
     public Response getRouteByTripId(String tripId, HttpHeaders headers) {
@@ -264,40 +284,46 @@ public class TravelServiceImpl implements TravelService {
 
         TravelServiceImpl.LOGGER.info("[getTicketsByBatch][before get basic][trips: {}]", trips);
 
-        HttpEntity requestEntity = new HttpEntity(infos, null);
-        String basic_service_url = getServiceUrl("ts-basic-service");
-        ResponseEntity<Response> re = restTemplate.exchange(
-                basic_service_url + "/api/v1/basicservice/basic/travels",
-                HttpMethod.POST,
-                requestEntity,
-                Response.class);
+        try {
+            HttpEntity requestEntity = new HttpEntity(infos, null);
+            String basic_service_url = getServiceUrl("ts-basic-service");
+            ResponseEntity<Response> re = executeWithCircuitBreaker(
+                    "ts-basic-service",
+                    basic_service_url + "/api/v1/basicservice/basic/travels",
+                    HttpMethod.POST,
+                    requestEntity,
+                    Response.class);
 
-        Response r = re.getBody();
-        if(r.getStatus() == 0){
-            TravelServiceImpl.LOGGER.info("[getTicketsByBatch][Ts-basic-service response status is 0][response is: {}]", r);
+            Response r = re.getBody();
+            if(r.getStatus() == 0){
+                TravelServiceImpl.LOGGER.info("[getTicketsByBatch][Ts-basic-service response status is 0][response is: {}]", r);
+                return responses;
+            }
+            Map<String, TravelResult> trMap;
+            ObjectMapper mapper = new ObjectMapper();
+            try{
+                trMap = mapper.readValue(JsonUtils.object2Json(r.getData()), new TypeReference<Map<String, TravelResult>>(){});
+            }catch(Exception e) {
+                TravelServiceImpl.LOGGER.warn("[getTicketsByBatch][Ts-basic-service convert data failed][Fail msg: {}]", e.getMessage());
+                return responses;
+            }
+
+            for(Map.Entry<String, TravelResult> trEntry: trMap.entrySet()){
+                //Set the returned ticket information
+                String tripNumber = trEntry.getKey();
+                TravelResult tr = trEntry.getValue();
+                Trip trip = tripMap.get(tripNumber);
+
+                TripResponse response = setResponse(trip, tr, startPlaceName, endPlaceName, departureTime, headers);
+                responses.add(response);
+            }
+            return responses;
+
+        } catch (ServiceException e) {
+            LOGGER.warn("[getTicketsByBatch][Circuit breaker activated][{}]", e.getMessage());
             return responses;
         }
-        Map<String, TravelResult> trMap;
-        ObjectMapper mapper = new ObjectMapper();
-        try{
-            trMap = mapper.readValue(JsonUtils.object2Json(r.getData()), new TypeReference<Map<String, TravelResult>>(){});
-        }catch(Exception e) {
-            TravelServiceImpl.LOGGER.warn("[getTicketsByBatch][Ts-basic-service convert data failed][Fail msg: {}]", e.getMessage());
-            return responses;
-        }
-
-        for(Map.Entry<String, TravelResult> trEntry: trMap.entrySet()){
-            //Set the returned ticket information
-            String tripNumber = trEntry.getKey();
-            TravelResult tr = trEntry.getValue();
-            Trip trip = tripMap.get(tripNumber);
-
-            TripResponse response = setResponse(trip, tr, startPlaceName, endPlaceName, departureTime, headers);
-            responses.add(response);
-        }
-        return responses;
     }
-
 
     private TripResponse getTickets(Trip trip, Route route1, String startPlaceName, String endPlaceName, String departureTime, HttpHeaders headers) {
 
@@ -418,62 +444,79 @@ public class TravelServiceImpl implements TravelService {
     }
 
     private TrainType getTrainTypeByName(String trainTypeName, HttpHeaders headers) {
-        HttpEntity requestEntity = new HttpEntity(null);
-        String train_service_url = getServiceUrl("ts-train-service");
-        ResponseEntity<Response<TrainType>> re = restTemplate.exchange(
-                train_service_url + "/api/v1/trainservice/trains/byName/" + trainTypeName,
-                HttpMethod.GET,
-                requestEntity,
-                new ParameterizedTypeReference<Response<TrainType>>() {
-                });
+        try {
+            HttpEntity requestEntity = new HttpEntity(null);
+            String train_service_url = getServiceUrl("ts-train-service");
+            ResponseEntity<Response<TrainType>> re = executeWithCircuitBreaker(
+                    "ts-train-service",
+                    train_service_url + "/api/v1/trainservice/trains/byName/" + trainTypeName,
+                    HttpMethod.GET,
+                    requestEntity,
+                    new ParameterizedTypeReference<Response<TrainType>>() {});
 
-        return re.getBody().getData();
+            return re.getBody().getData();
+        } catch (ServiceException e) {
+            LOGGER.warn("[getTrainTypeByName][Circuit breaker activated][{}]", e.getMessage());
+            return null;
+        }
     }
 
     private Route getRouteByRouteId(String routeId, HttpHeaders headers) {
-        TravelServiceImpl.LOGGER.debug("[getRouteByRouteId][Get Route By Id][Route ID：{}]", routeId);
-        HttpEntity requestEntity = new HttpEntity(null);
-        String route_service_url = getServiceUrl("ts-route-service");
-        ResponseEntity<Response> re = restTemplate.exchange(
-                route_service_url + "/api/v1/routeservice/routes/" + routeId,
-                HttpMethod.GET,
-                requestEntity,
-                Response.class);
-        Response result = re.getBody();
+        try {
+            TravelServiceImpl.LOGGER.debug("[getRouteByRouteId][Get Route By Id][Route ID：{}]", routeId);
+            HttpEntity requestEntity = new HttpEntity(null);
+            String route_service_url = getServiceUrl("ts-route-service");
+            ResponseEntity<Response> re = executeWithCircuitBreaker(
+                    "ts-route-service",
+                    route_service_url + "/api/v1/routeservice/routes/" + routeId,
+                    HttpMethod.GET,
+                    requestEntity,
+                    Response.class);
+                    
+            Response result = re.getBody();
 
-        if (result.getStatus() == 0 ) {
-            TravelServiceImpl.LOGGER.error("[getRouteByRouteId][Get Route By Id Fail][Route not found][RouteId: {}]", routeId);
+            if (result.getStatus() == 0) {
+                TravelServiceImpl.LOGGER.error("[getRouteByRouteId][Get Route By Id Fail][Route not found][RouteId: {}]", routeId);
+                return null;
+            } else {
+                TravelServiceImpl.LOGGER.info("[getRouteByRouteId][Get Route By Id Success]");
+                return JsonUtils.conveterObject(result.getData(), Route.class);
+            }
+        } catch (ServiceException e) {
+            LOGGER.warn("[getRouteByRouteId][Circuit breaker activated][{}]", e.getMessage());
             return null;
-        } else {
-            TravelServiceImpl.LOGGER.info("[getRouteByRouteId][Get Route By Id Success]");
-            return JsonUtils.conveterObject(result.getData(), Route.class);
         }
     }
 
     private int getRestTicketNumber(String travelDate, String trainNumber, String startStationName, String endStationName, int seatType, int totalNum, List<String> stationList, HttpHeaders headers) {
-        Seat seatRequest = new Seat();
+        try {
+            Seat seatRequest = new Seat();
+            seatRequest.setDestStation(endStationName);
+            seatRequest.setStartStation(startStationName);
+            seatRequest.setTrainNumber(trainNumber);
+            seatRequest.setTravelDate(travelDate);
+            seatRequest.setSeatType(seatType);
+            seatRequest.setTotalNum(totalNum);
+            seatRequest.setStations(stationList);
 
-        seatRequest.setDestStation(endStationName);
-        seatRequest.setStartStation(startStationName);
-        seatRequest.setTrainNumber(trainNumber);
-        seatRequest.setTravelDate(travelDate);
-        seatRequest.setSeatType(seatType);
-        seatRequest.setTotalNum(totalNum);
-        seatRequest.setStations(stationList);
+            TravelServiceImpl.LOGGER.info("[getRestTicketNumber][Seat request][request: {}]", seatRequest.toString());
 
-        TravelServiceImpl.LOGGER.info("[getRestTicketNumber][Seat request][request: {}]", seatRequest.toString());
-
-        HttpEntity requestEntity = new HttpEntity(seatRequest, null);
-        String seat_service_url = getServiceUrl("ts-seat-service");
-        ResponseEntity<Response<Integer>> re = restTemplate.exchange(
-                seat_service_url + "/api/v1/seatservice/seats/left_tickets",
-                HttpMethod.POST,
-                requestEntity,
-                new ParameterizedTypeReference<Response<Integer>>() {
-                });
-        TravelServiceImpl.LOGGER.info("[getRestTicketNumber][Get Rest tickets num][num is: {}]", re.getBody().toString());
-
-        return re.getBody().getData();
+            HttpEntity requestEntity = new HttpEntity(seatRequest, null);
+            String seat_service_url = getServiceUrl("ts-seat-service");
+            
+            ResponseEntity<Response<Integer>> re = executeWithCircuitBreaker(
+                    "ts-seat-service",
+                    seat_service_url + "/api/v1/seatservice/seats/left_tickets",
+                    HttpMethod.POST,
+                    requestEntity,
+                    new ParameterizedTypeReference<Response<Integer>>() {});
+                    
+            TravelServiceImpl.LOGGER.info("[getRestTicketNumber][Get Rest tickets num][num is: {}]", re.getBody().toString());
+            return re.getBody().getData();
+        } catch (ServiceException e) {
+            LOGGER.warn("[getRestTicketNumber][Circuit breaker activated][{}]", e.getMessage());
+            return 0;
+        }
     }
 
     @Override

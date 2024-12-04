@@ -187,76 +187,77 @@ public class SeatServiceImpl implements SeatService {
 
     @Override
     public Response distributeSeat(Seat seatRequest, HttpHeaders headers) {
-        String traceId = TraceContext.traceId();
-        String segmentId = TraceContext.segmentId();
-        String parentTraceId = headers.getFirst("sw8");
-        SpanRef seatSpan = null;  // Declare seatSpan here
-
-        LOGGER.info("[seat][Received request][TraceID: {}][SegmentID: {}][Parent TraceID: {}]",
-            traceId, segmentId, parentTraceId);
+        // Extract trace ID from incoming request
+        String traceId = headers.getFirst("sw8");
+        if (traceId == null) {
+            traceId = TraceContext.traceId();
+        }
+        
+        LOGGER.info("[seat][Received request][TraceID: {}]", traceId);
 
         try {
-            // Create span for seat processing
-            seatSpan = Tracer.createLocalSpan("seat.process");
-            seatSpan.tag("parent.traceId", parentTraceId);
+            //Distinguish G\D from other trains
+            String trainNumber = seatRequest.getTrainNumber();
+            Response result;
 
-            // Create carrier for downstream calls
-            ContextCarrierRef carrier = new ContextCarrierRef();
-            Tracer.inject(carrier);
+            if (trainNumber.startsWith("G") || trainNumber.startsWith("D")) {
+                LOGGER.info("[distributeSeat][TrainNumber start][G or D][TraceID: {}]", traceId);
 
-            // Prepare headers for order service call
-            HttpHeaders orderHeaders = new HttpHeaders();
-            if (headers != null) {
-                orderHeaders.putAll(headers);
-            }
+                // Add trace ID to downstream request
+                HttpHeaders orderHeaders = new HttpHeaders();
+                orderHeaders.set("sw8", traceId);
+                orderHeaders.set("sw8-correlation", traceId);
 
-            CarrierItemRef item = carrier.items();
-            while (item.hasNext()) {
-                item = item.next();
-                orderHeaders.set(item.getHeadKey(), item.getHeadValue());
-            }
-
-            // Ensure SW8 correlation
-            orderHeaders.set("sw8", traceId);
-
-            // Create request for order service
-            HttpEntity<?> orderRequest = new HttpEntity<>(seatRequest, orderHeaders);
-
-            // Make order service call with propagated context
-            String orderServiceUrl = getServiceUrl("ts-order-service");
-            ResponseEntity<Response<LeftTicketInfo>> response;
-            
-            SpanRef orderSpan = null;
-            try {
-                orderSpan = Tracer.createExitSpan("query.order", "ts-order-service");
-                response = restTemplate.exchange(
-                    orderServiceUrl + "/api/v1/orderservice/order/tickets",
-                    HttpMethod.POST,  
+                HttpEntity<?> orderRequest = new HttpEntity<>(seatRequest, orderHeaders);
+                String order_service_url = getServiceUrl("ts-order-service");
+                
+                ResponseEntity<Response<LeftTicketInfo>> re3 = restTemplate.exchange(
+                    order_service_url + "/api/v1/orderservice/order/tickets",
+                    HttpMethod.POST,
                     orderRequest,
                     new ParameterizedTypeReference<Response<LeftTicketInfo>>() {}
                 );
-            } finally {
-                if (orderSpan != null) {
-                    Tracer.stopSpan();
-                }
+
+                LOGGER.info("[distributeSeat][Left ticket info][info is : {}][TraceID: {}]", 
+                    re3.getBody().toString(), traceId);
+                LeftTicketInfo leftTicketInfo = re3.getBody().getData();
+                
+                result = processDistributeSeat(seatRequest, leftTicketInfo);
+                
+            } else {
+                LOGGER.info("[distributeSeat][TrainNumber start][Other Capital Except D and G][TraceID: {}]", traceId);
+                
+                // Add trace ID to downstream request
+                HttpHeaders orderHeaders = new HttpHeaders();
+                orderHeaders.set("sw8", traceId);
+                orderHeaders.set("sw8-correlation", traceId);
+
+                HttpEntity<?> orderRequest = new HttpEntity<>(seatRequest, orderHeaders);
+                String order_other_service_url = getServiceUrl("ts-order-other-service");
+                
+                ResponseEntity<Response<LeftTicketInfo>> re3 = restTemplate.exchange(
+                    order_other_service_url + "/api/v1/orderOtherService/orderOther/tickets",
+                    HttpMethod.POST,
+                    orderRequest,
+                    new ParameterizedTypeReference<Response<LeftTicketInfo>>() {}
+                );
+
+                LOGGER.info("[distributeSeat][Left ticket info][info is : {}][TraceID: {}]", 
+                    re3.getBody().toString(), traceId);
+                LeftTicketInfo leftTicketInfo = re3.getBody().getData();
+                
+                result = processDistributeSeat(seatRequest, leftTicketInfo);
             }
 
-            // Process response and continue with seat allocation
-            Response seatResponse = processDistributeSeat(seatRequest, orderHeaders);
-            
             LOGGER.info("[seat][Request completed][TraceID: {}]", traceId);
-            return seatResponse;
+            return result;
 
         } catch (Exception e) {
-            LOGGER.error("[seat][Request failed][TraceID: {}][Error: {}]", traceId, e.getMessage());
+            LOGGER.error("[seat][Request failed][TraceID: {}][Error: {}]", 
+                traceId, e.getMessage());
             throw e;
-        } finally {
-            if (seatSpan != null) {
-                Tracer.stopSpan();
-            }
         }
     }
-
 
     private boolean isContained(Set<Ticket> soldTickets, int seat) {
         //Check that the seat number has been used

@@ -12,6 +12,7 @@ import org.apache.skywalking.apm.toolkit.trace.ContextSnapshotRef;
 import org.apache.skywalking.apm.toolkit.trace.SpanRef;
 import org.springframework.web.context.request.RequestAttributes;
 import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.client.RestTemplate;
 
 @Configuration
 public class AsyncConfig {

@@ -68,24 +68,25 @@ public class AsyncConfig {
             String traceId = TraceContext.traceId();
             String segmentId = TraceContext.segmentId();
             
-            // Get SkyWalking carrier
-            ContextCarrierRef carrier = new ContextCarrierRef();
-            Tracer.inject(carrier);
-            
             LOGGER.debug("[RestTemplate][Injecting trace context][TraceId: {}][SegmentId: {}]", 
                 traceId, segmentId);
                 
-            // Add context propagation headers
-            CarrierItemRef item = carrier.items(); 
-            while (item.hasNext()) {
-                item = item.next();
-                request.getHeaders().set(item.getHeadKey(), item.getHeadValue());
-            }
-            
-            // Add additional SW8 trace headers
+            // Add SW8 headers
+            request.getHeaders().set("sw8", traceId);
             request.getHeaders().set("sw8-correlation", traceId);
+            request.getHeaders().set("sw8-segment", segmentId);
             
-            return execution.execute(request, body);
+            // Add trace parent context
+            String traceparent = String.format("00-%s-%s-01", traceId, segmentId);
+            request.getHeaders().set("traceparent", traceparent);
+            
+            // Add span context
+            SpanRef span = Tracer.createExitSpan("RestTemplate", request.getURI().getHost());
+            try {
+                return execution.execute(request, body);
+            } finally {
+                Tracer.stopSpan();
+            }
         });
         return template;
     }

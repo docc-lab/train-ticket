@@ -201,7 +201,7 @@ public class TravelServiceImpl implements TravelService {
             }
         } catch (Exception e) {
             LOGGER.error("[executeRestTicketBurst][Burst execution failed][Error: {}]", e.getMessage());
-            throw e;
+            // throw e;
         } finally {
             parentSpan.asyncFinish();
         }

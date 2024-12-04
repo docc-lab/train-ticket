@@ -64,15 +64,26 @@ public class AsyncConfig {
     public RestTemplate restTemplate(RestTemplateBuilder builder) {
         RestTemplate template = builder.build();
         template.getInterceptors().add((request, body, execution) -> {
+            // Get current trace context
             String traceId = TraceContext.traceId();
             String segmentId = TraceContext.segmentId();
-            LOGGER.debug("[RestTemplate][Adding trace headers][TraceID: {}][SegmentID: {}]", traceId, segmentId);
             
-            // Add all common trace headers
-            request.getHeaders().set("sw8", traceId);
+            // Get SkyWalking carrier
+            ContextCarrierRef carrier = new ContextCarrierRef();
+            Tracer.inject(carrier);
+            
+            LOGGER.debug("[RestTemplate][Injecting trace context][TraceId: {}][SegmentId: {}]", 
+                traceId, segmentId);
+                
+            // Add context propagation headers
+            CarrierItemRef item = carrier.items(); 
+            while (item.hasNext()) {
+                item = item.next();
+                request.getHeaders().set(item.getHeadKey(), item.getHeadValue());
+            }
+            
+            // Add additional SW8 trace headers
             request.getHeaders().set("sw8-correlation", traceId);
-            request.getHeaders().set("X-B3-TraceId", traceId);
-            request.getHeaders().set("X-B3-SpanId", segmentId);
             
             return execution.execute(request, body);
         });

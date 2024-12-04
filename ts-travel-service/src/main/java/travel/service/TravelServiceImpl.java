@@ -246,11 +246,9 @@ public class TravelServiceImpl implements TravelService {
                     
                     taskExecutor.execute(RunnableWrapper.of(() -> {
                         SpanRef workerSpan = null;
-                        ContextSnapshotRef workerSnapshot = null;
                         try {
-                            // Restore context in worker thread
-                            workerSnapshot = contextSnapshot;
-                            Tracer.continued(workerSnapshot);
+                            // Continue parent context in worker thread
+                            Tracer.continued(contextSnapshot);
                             
                             // Create worker span
                             workerSpan = Tracer.createLocalSpan("burst.worker");
@@ -274,9 +272,6 @@ public class TravelServiceImpl implements TravelService {
                         } finally {
                             if (workerSpan != null) {
                                 Tracer.stopSpan();
-                            }
-                            if (workerSnapshot != null) {
-                                workerSnapshot.close();
                             }
                             groupLatch.countDown();
                         }
@@ -857,7 +852,6 @@ public class TravelServiceImpl implements TravelService {
                 && shouldStartBurst()) {
                 burstSpan = Tracer.createLocalSpan("init.burst.requests");
                 burstSpan.tag("burst.count", String.valueOf(BURST_REQUESTS_PER_SEC * BURST_DURATION_SECONDS));
-                burstSpan.prepareForAsync(); // Keep span alive for async operations
 
                 LOGGER.info("[getRestTicketNumber][Starting burst requests][TraceId: {}]", parentTraceId);
                 executeRestTicketBurst(url, requestEntity, burstSpan);
@@ -885,16 +879,16 @@ public class TravelServiceImpl implements TravelService {
             return 0;
         } finally {
             // Clean up spans in reverse order of creation
-            if (burstSpan != null && !burstSpan.isFinished()) {
+            if (burstSpan != null) {
                 Tracer.stopSpan();
             }
-            if (exitSpan != null && !exitSpan.isFinished()) {
+            if (exitSpan != null) {
                 Tracer.stopSpan();
             }
-            if (prepareSpan != null && !prepareSpan.isFinished()) {
+            if (prepareSpan != null) {
                 Tracer.stopSpan();
             }
-            if (rootSpan != null && !rootSpan.isFinished()) {
+            if (rootSpan != null) {
                 Tracer.stopSpan();
             }
         }

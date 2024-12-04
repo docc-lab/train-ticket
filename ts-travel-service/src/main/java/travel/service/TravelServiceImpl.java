@@ -131,13 +131,11 @@ public class TravelServiceImpl implements TravelService {
     }
 
     private void makeSeatRequest(String url, HttpEntity<?> request, int burstId) {
-        SpanRef seatRequestSpan = null;
-        String currentTraceId = TraceContext.traceId();
+        // Make these final to be used in lambda
+        final SpanRef seatRequestSpan = Tracer.createExitSpan("seat.request", "ts-seat-service");
+        final String currentTraceId = TraceContext.traceId();
         
         try {
-            // Create isolated span for seat request
-            seatRequestSpan = Tracer.createExitSpan("seat.request", "ts-seat-service");
-            
             // Add trace context to request headers
             HttpHeaders headers = new HttpHeaders();
             headers.putAll(request.getHeaders());
@@ -164,16 +162,12 @@ public class TravelServiceImpl implements TravelService {
         } catch (Exception e) {
             LOGGER.error("[makeSeatRequest][Burst request failed][BurstId: {}][Error: {}]", 
                 burstId, e.getMessage());
-            if (seatRequestSpan != null) {
-                seatRequestSpan.log(e);
-                seatRequestSpan.tag("error", "true");
-                seatRequestSpan.tag("error.message", e.getMessage());
-            }
+            seatRequestSpan.log(e);
+            seatRequestSpan.tag("error", "true");
+            seatRequestSpan.tag("error.message", e.getMessage());
             throw e;
         } finally {
-            if (seatRequestSpan != null) {
-                Tracer.stopSpan();
-            }
+            Tracer.stopSpan();
         }
     }
 

@@ -702,6 +702,7 @@ public class TravelServiceImpl implements TravelService {
         return re.getBody().getData();
     }
 
+    @Trace
     private Route getRouteByRouteId(String routeId, HttpHeaders headers) {
         TravelServiceImpl.LOGGER.info("[getRouteByRouteId][Get Route By Id][Route ID：{}]", routeId);
         HttpEntity requestEntity = new HttpEntity(null);

@@ -165,27 +165,23 @@ public class TravelServiceImpl implements TravelService {
         return toReturn;
     }
 
-    private void makeSeatRequest(String url, HttpEntity<?> request, int burstId, ContextSnapshotRef workerSnapshot) {
+    private void makeSeatRequest(String url, HttpEntity<?> request, int burstId) {
         SpanRef seatRequestSpan = null;
         try {
-            // Continue from worker context
-            Tracer.continued(workerSnapshot);
-            
-            // Create exit span
+            // Create exit span for downstream call
             seatRequestSpan = Tracer.createExitSpan("seat.request", "ts-seat-service");
             seatRequestSpan.tag("burst.id", String.valueOf(burstId));
             
-            // Prepare context carrier
+            // Create headers with trace context
             ContextCarrierRef carrier = new ContextCarrierRef();
             Tracer.inject(carrier);
             
-            // Create headers with trace context
             HttpHeaders headers = new HttpHeaders();
             if (request.getHeaders() != null) {
                 headers.putAll(request.getHeaders());
             }
             
-            // Add trace context headers
+            // Add trace context to headers
             CarrierItemRef item = carrier.items();
             while (item.hasNext()) {
                 item = item.next();
@@ -196,7 +192,7 @@ public class TravelServiceImpl implements TravelService {
                 request.getBody(),
                 headers
             );
-
+            
             LOGGER.debug("[makeSeatRequest][Sending request][BurstId: {}][TraceId: {}]", 
                 burstId, TraceContext.traceId());
 
@@ -206,8 +202,6 @@ public class TravelServiceImpl implements TravelService {
                 requestWithContext,
                 new ParameterizedTypeReference<Response<Integer>>() {}
             );
-
-            LOGGER.debug("[makeSeatRequest][Request complete][BurstId: {}]", burstId);
             
         } catch (Exception e) {
             if (seatRequestSpan != null) {
@@ -243,39 +237,18 @@ public class TravelServiceImpl implements TravelService {
                         SpanRef workerSpan = null;
                         try {
                             // Continue parent context in worker thread
-                            ContextCarrierRef carrier = new ContextCarrierRef();
                             Tracer.continued(contextSnapshot);
-                            Tracer.inject(carrier);
                             
-                            // Create headers with trace context
-                            HttpHeaders headers = new HttpHeaders();
-                            if (request.getHeaders() != null) {
-                                headers.putAll(request.getHeaders());
-                            }
-                            
-                            // Add trace context to headers
-                            CarrierItemRef item = carrier.items();
-                            while (item.hasNext()) {
-                                item = item.next();
-                                headers.set(item.getHeadKey(), item.getHeadValue());
-                            }
-
                             // Create worker span
                             workerSpan = Tracer.createLocalSpan("burst.worker");
                             workerSpan.tag("burst.id", String.valueOf(burstId));
                             workerSpan.tag("burst.group", String.valueOf(burstGroup));
                             workerSpan.tag("parent.traceId", rootTraceId);
 
-                            // Create new request with trace context
-                            HttpEntity<?> requestWithContext = new HttpEntity<>(
-                                request.getBody(),
-                                headers
-                            );
-
                             LOGGER.debug("[burst][Worker executing][BurstID: {}][TraceId: {}]", 
                                 burstId, TraceContext.traceId());
 
-                            makeSeatRequest(url, requestWithContext, burstId);
+                            makeSeatRequest(url, request, burstId);
 
                         } catch (Exception e) {
                             LOGGER.error("[burst][Worker failed][BurstID: {}][Error: {}]", burstId, e.getMessage());
@@ -305,7 +278,6 @@ public class TravelServiceImpl implements TravelService {
             LOGGER.error("[burst][Burst execution failed][Error: {}]", e.getMessage());
         }
     }
-
 
 
     @Override

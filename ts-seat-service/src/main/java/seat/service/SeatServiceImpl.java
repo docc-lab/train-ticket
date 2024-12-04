@@ -113,31 +113,26 @@ public class SeatServiceImpl implements SeatService {
     // Helper method to process the original seat distribution logic
     private Response processDistributeSeat(Seat seatRequest, HttpHeaders headers) {
         // Original distributeSeat logic
-        Response<Route> routeResult;
 
         LeftTicketInfo leftTicketInfo;
-        TrainType trainTypeResult = null;
-        ResponseEntity<Response<Route>> re;
-        ResponseEntity<Response<TrainType>> re2;
         ResponseEntity<Response<LeftTicketInfo>> re3;
 
         //Distinguish G\D from other trains
         String trainNumber = seatRequest.getTrainNumber();
 
         if (trainNumber.startsWith("G") || trainNumber.startsWith("D")) {
-            SeatServiceImpl.LOGGER.info("[distributeSeat][TrainNumber start][G or D]");
+            LOGGER.info("[distributeSeat][TrainNumber start][G or D]");
 
-            HttpEntity requestEntity = new HttpEntity(null);
-            //Call the microservice to query for residual Ticket information: the set of the Ticket sold for the specified seat type
-            requestEntity = new HttpEntity(seatRequest, null);
-            String order_service_url=getServiceUrl("ts-order-service");
+            HttpEntity<?> requestEntity = new HttpEntity<>(seatRequest, headers);
+            String order_service_url = getServiceUrl("ts-order-service");
             re3 = restTemplate.exchange(
-                    order_service_url + "/api/v1/orderservice/order/tickets",
-                    HttpMethod.POST,
-                    requestEntity,
-                    new ParameterizedTypeReference<Response<LeftTicketInfo>>() {
-                    });
-            SeatServiceImpl.LOGGER.info("[distributeSeat][Left ticket info][info is : {}]", re3.getBody().toString());
+                order_service_url + "/api/v1/orderservice/order/tickets",
+                HttpMethod.POST,
+                requestEntity,
+                new ParameterizedTypeReference<Response<LeftTicketInfo>>() {}
+            );
+            
+            LOGGER.info("[distributeSeat][Left ticket info][info is : {}]", re3.getBody().toString());
             leftTicketInfo = re3.getBody().getData();
         } else {
             SeatServiceImpl.LOGGER.info("[distributeSeat][TrainNumber start][Other Capital Except D and G]");
@@ -246,7 +241,7 @@ public class SeatServiceImpl implements SeatService {
             }
 
             // Process response and continue with seat allocation
-            Response seatResponse = processDistributeSeat(seatRequest, response.getBody().getData());
+            Response seatResponse = processDistributeSeat(seatRequest, orderHeaders);
             
             LOGGER.info("[seat][Request completed][TraceID: {}]", traceId);
             return seatResponse;
@@ -254,6 +249,10 @@ public class SeatServiceImpl implements SeatService {
         } catch (Exception e) {
             LOGGER.error("[seat][Request failed][TraceID: {}][Error: {}]", traceId, e.getMessage());
             throw e;
+        } finally {
+            if (seatSpan != null) {
+                Tracer.stopSpan();
+            }
         }
     }
 

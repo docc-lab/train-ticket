@@ -17,7 +17,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
-import org.springframework.cloud.client.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import org.springframework.cloud.circuitbreaker.resilience4j.Resilience4JCircuitBreakerFactory;
 
 import travel2.entity.AdminTrip;
@@ -25,10 +25,10 @@ import travel2.entity.Trip;
 import travel2.entity.Travel;
 import travel2.entity.TripAllDetail;
 import travel2.repository.TripRepository;
-import travel2.exception.ServiceException;
 
 import javax.transaction.Transactional;
 import java.util.*;
+
 
 /**
  * @author fdse
@@ -52,18 +52,22 @@ public class TravelServiceImpl implements TravelService {
     private static final Logger LOGGER = LoggerFactory.getLogger(TravelServiceImpl.class);
 
     private String getServiceUrl(String serviceName) {
-        return "http://" + serviceName; }
+        return "http://" + serviceName;
+    }
 
     String success = "Success";
     String noCnontent = "No Content";
 
     private ResponseEntity<Response> executeWithCircuitBreaker(String serviceName, String url, HttpMethod method, HttpEntity<?> request, ParameterizedTypeReference<Response> responseType) {
-        CircuitBreaker circuitBreaker = circuitBreakerFactory.create(serviceName);
+        io.github.resilience4j.circuitbreaker.CircuitBreaker circuitBreaker = circuitBreakerFactory.create(serviceName).getCircuitBreaker();
         
-        return circuitBreaker.run(
-            () -> restTemplate.exchange(url, method, request, responseType),
-            throwable -> handleFailure(serviceName, throwable)
-        );
+        return Try.of(() -> 
+            restTemplate.exchange(url, method, request, responseType)
+        ).recover(throwable -> {
+            LOGGER.error("[CircuitBreaker][Service: {}][Error: {}]", serviceName, throwable.getMessage());
+            Response errorResponse = new Response<>(0, "Service temporarily unavailable: " + serviceName, null);
+            return ResponseEntity.ok(errorResponse);
+        }).get();
     }
 
     private ResponseEntity<Response> handleFailure(String serviceName, Throwable throwable) {
@@ -464,20 +468,20 @@ public class TravelServiceImpl implements TravelService {
             TravelServiceImpl.LOGGER.debug("[getRouteByRouteId][Get Route By Id][Route ID：{}]", routeId);
             HttpEntity requestEntity = new HttpEntity(null);
             String route_service_url = getServiceUrl("ts-route-service");
-            ResponseEntity<Response> re = restTemplate.exchange(
+            ResponseEntity<Response<Route>> re = restTemplate.exchange(
                     route_service_url + "/api/v1/routeservice/routes/" + routeId,
                     HttpMethod.GET,
                     requestEntity,
-                    new ParameterizedTypeReference<Response>() {});
+                    new ParameterizedTypeReference<Response<Route>>() {});
                     
-            Response result = re.getBody();
+            Response<Route> result = re.getBody();
 
             if (result.getStatus() == 0) {
                 TravelServiceImpl.LOGGER.error("[getRouteByRouteId][Get Route By Id Fail][Route not found][RouteId: {}]", routeId);
                 return null;
             } else {
                 TravelServiceImpl.LOGGER.info("[getRouteByRouteId][Get Route By Id Success]");
-                return JsonUtils.conveterObject(result.getData(), Route.class);
+                return result.getData();
             }
         } catch (Exception e) {
             LOGGER.warn("[getRouteByRouteId][Service error][{}]", e.getMessage());

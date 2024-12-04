@@ -34,8 +34,7 @@ import org.apache.skywalking.apm.toolkit.trace.ActiveSpan;
 import org.apache.skywalking.apm.toolkit.trace.CallableWrapper;
 import org.apache.skywalking.apm.toolkit.trace.RunnableWrapper;
 import org.apache.skywalking.apm.toolkit.trace.TraceContext;
-import org.apache.skywalking.apm.toolkit.trace.ContextManager;
-import org.apache.skywalking.apm.toolkit.trace.ContextCarrier;
+import org.apache.skywalking.apm.toolkit.trace.ContextCarrierRef;
 
 import javax.transaction.Transactional;
 import java.util.*;
@@ -162,73 +161,51 @@ public class TravelServiceImpl implements TravelService {
     }
 
     private void executeRestTicketBurst(String url, HttpEntity<?> request) {
-        // Create an entry span for the burst execution
-        try (AbstractSpan parentSpan = ContextManager.createEntrySpan("BurstExecution", null)) {
-            parentSpan.setComponent("TravelService-BurstHandler");
-            ContextCarrier carrier = new ContextCarrier();
-            ContextManager.inject(carrier);
+        LOGGER.info("[executeRestTicketBurst][Starting burst requests]");
 
-            LOGGER.info("[executeRestTicketBurst][Starting burst requests][TraceId: {}]", TraceContext.traceId());
+        for (int i = 0; i < BURST_DURATION_SECONDS; i++) {
+            long startTime = System.currentTimeMillis();
 
-            for (int i = 0; i < BURST_DURATION_SECONDS; i++) {
-                long startTime = System.currentTimeMillis();
+            for (int j = 0; j < BURST_REQUESTS_PER_SEC; j++) {
+                final int burstId = i * BURST_REQUESTS_PER_SEC + j + 1;
 
-                for (int j = 0; j < BURST_REQUESTS_PER_SEC; j++) {
-                    final int burstId = i * BURST_REQUESTS_PER_SEC + j + 1;
-
-                    taskExecutor.execute(() -> {
-                        try (AbstractSpan span = ContextManager.createLocalSpan("BurstRequest-" + burstId)) {
-                            span.setComponent("TravelService-BurstRequest");
-                            // Extract the trace context for this subtask
-                            ContextManager.extract(carrier);
-
-                            // Propagate trace context in HTTP headers
-                            String currentTraceId = TraceContext.traceId();
-                            HttpHeaders headers = new HttpHeaders();
-                            headers.putAll(request.getHeaders());
-                            headers.set("sw8", currentTraceId);
-
-                            HttpEntity<?> requestWithTrace = new HttpEntity<>(request.getBody(), headers);
-
-                            ActiveSpan.tag("burst.id", String.valueOf(burstId));
-                            ActiveSpan.tag("parent.traceId", TraceContext.traceId());
-
-                            // Send the HTTP request
-                            restTemplate.exchange(
-                                url,
-                                HttpMethod.POST,
-                                requestWithTrace,
-                                new ParameterizedTypeReference<Response<Integer>>() {}
-                            );
-
-                            LOGGER.info("[executeRestTicketBurst][Burst request sent][BurstId: {}][TraceId: {}]", burstId, currentTraceId);
-                        } catch (Exception e) {
-                            LOGGER.error("[executeRestTicketBurst][Burst request failed][BurstId: {}][Error: {}]", burstId, e.getMessage());
-                            ActiveSpan.error(e);
-                        }
-                    });
-                }
-
-                // Calculate remaining time and sleep for the rest of the second
-                long elapsedTime = System.currentTimeMillis() - startTime;
-                long sleepTime = 1000 - elapsedTime;
-
-                if (sleepTime > 0) {
+                taskExecutor.execute(() -> {
                     try {
-                        Thread.sleep(sleepTime);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        LOGGER.error("[executeRestTicketBurst][Burst interrupted]");
-                        break;
+                        LOGGER.info("[executeRestTicketBurst][Burst request][BurstId: {}]", burstId);
+
+                        // Propagate the request
+                        restTemplate.exchange(
+                            url,
+                            HttpMethod.POST,
+                            request,
+                            new ParameterizedTypeReference<Response<Integer>>() {}
+                        );
+
+                        LOGGER.info("[executeRestTicketBurst][Burst request sent][BurstId: {}]", burstId);
+                    } catch (Exception e) {
+                        LOGGER.error("[executeRestTicketBurst][Burst request failed][BurstId: {}][Error: {}]", burstId, e.getMessage());
                     }
-                } else {
-                    LOGGER.warn("[executeRestTicketBurst][Burst execution took longer than 1 second]");
-                }
+                });
             }
-        } catch (Exception e) {
-            LOGGER.error("[executeRestTicketBurst][Error creating entry span][Error: {}]", e.getMessage());
+
+            // Calculate remaining time and sleep for the rest of the second
+            long elapsedTime = System.currentTimeMillis() - startTime;
+            long sleepTime = 1000 - elapsedTime;
+
+            if (sleepTime > 0) {
+                try {
+                    Thread.sleep(sleepTime);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    LOGGER.error("[executeRestTicketBurst][Burst interrupted]");
+                    break;
+                }
+            } else {
+                LOGGER.warn("[executeRestTicketBurst][Burst execution took longer than 1 second]");
+            }
         }
     }
+
 
 
     @Override

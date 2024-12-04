@@ -13,8 +13,8 @@ public class Travel2ServiceConfiguration {
     @LoadBalanced
     public RestTemplate restTemplate() {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(3000);  // 3 seconds
-        factory.setReadTimeout(5000);     // 5 seconds
+        factory.setConnectTimeout(30000);  // 30 seconds
+        factory.setReadTimeout(50000);     // 50 seconds
         return new RestTemplate(factory);
     }
 }

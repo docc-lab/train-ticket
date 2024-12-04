@@ -221,6 +221,10 @@ public class TravelServiceImpl implements TravelService {
         final String rootSegmentId = TraceContext.segmentId();
         final ContextSnapshotRef contextSnapshot = Tracer.capture();
 
+        // Create carrier for header propagation 
+        ContextCarrierRef carrier = new ContextCarrierRef();
+        Tracer.inject(carrier);
+
         LOGGER.info("[burst][Starting burst requests][Root TraceID: {}][Root SegmentID: {}]", 
             rootTraceId, rootSegmentId);
 
@@ -232,6 +236,25 @@ public class TravelServiceImpl implements TravelService {
 
                 for (int j = 0; j < BURST_REQUESTS_PER_SEC; j++) {
                     final int burstId = i * BURST_REQUESTS_PER_SEC + j + 1;
+                    
+                    // Create new headers with trace context for this request
+                    HttpHeaders headers = new HttpHeaders();
+                    if (request.getHeaders() != null) {
+                        headers.putAll(request.getHeaders());
+                    }
+                    
+                    // Add trace context to headers
+                    CarrierItemRef item = carrier.items();
+                    while (item.hasNext()) {
+                        item = item.next();
+                        headers.set(item.getHeadKey(), item.getHeadValue());
+                    }
+
+                    // Create new request with trace context
+                    final HttpEntity<?> requestWithContext = new HttpEntity<>(
+                        request.getBody(),
+                        headers
+                    );
                     
                     taskExecutor.execute(RunnableWrapper.of(() -> {
                         SpanRef workerSpan = null;
@@ -245,10 +268,12 @@ public class TravelServiceImpl implements TravelService {
                             workerSpan.tag("burst.group", String.valueOf(burstGroup));
                             workerSpan.tag("parent.traceId", rootTraceId);
 
-                            LOGGER.debug("[burst][Worker executing][BurstID: {}][TraceId: {}]", 
-                                burstId, TraceContext.traceId());
+                            String currentTraceId = TraceContext.traceId();
+                            LOGGER.info("[burst][Worker executing][BurstID: {}][CurrentTraceID: {}][ParentTraceID: {}]", 
+                                burstId, currentTraceId, rootTraceId);
 
-                            makeSeatRequest(url, request, burstId);
+                            // Use request with context
+                            makeSeatRequest(url, requestWithContext, burstId);
 
                         } catch (Exception e) {
                             LOGGER.error("[burst][Worker failed][BurstID: {}][Error: {}]", burstId, e.getMessage());

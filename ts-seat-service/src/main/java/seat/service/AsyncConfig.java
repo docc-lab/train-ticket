@@ -14,6 +14,7 @@ import org.springframework.web.context.request.RequestAttributes;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.cloud.client.loadbalancer.LoadBalanced;
+import org.springframework.boot.web.client.RestTemplateBuilder;
 
 @Configuration
 public class AsyncConfig {

@@ -34,6 +34,8 @@ import org.apache.skywalking.apm.toolkit.trace.ActiveSpan;
 import org.apache.skywalking.apm.toolkit.trace.CallableWrapper;
 import org.apache.skywalking.apm.toolkit.trace.RunnableWrapper;
 import org.apache.skywalking.apm.toolkit.trace.TraceContext;
+import org.apache.skywalking.apm.toolkit.trace.ContextManager;
+import org.apache.skywalking.apm.toolkit.trace.ContextCarrier;
 
 import javax.transaction.Transactional;
 import java.util.*;

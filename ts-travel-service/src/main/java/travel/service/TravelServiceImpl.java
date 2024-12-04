@@ -173,7 +173,11 @@ public class TravelServiceImpl implements TravelService {
 
     private void executeRestTicketBurst(String url, HttpEntity<?> request, SpanRef parentSpan) {
         final String rootTraceId = TraceContext.traceId();
-        parentSpan.prepareForAsync(); // Keep parent span alive
+        final String rootSegmentId = TraceContext.segmentId();
+        parentSpan.prepareForAsync();
+        
+        LOGGER.info("[burst][Starting burst requests][Root TraceID: {}][Root SegmentID: {}]", 
+            rootTraceId, rootSegmentId);
 
         try {
             for (int i = 0; i < BURST_DURATION_SECONDS; i++) {
@@ -200,6 +204,8 @@ public class TravelServiceImpl implements TravelService {
                             burstRequestSpan.tag("burst.sequence", String.valueOf(burstSequence));
                             
                             makeSeatRequest(url, request, burstId);
+
+                             LOGGER.info("[burst][Worker thread][BurstID: {}][Parent TraceID: {}][Current TraceID: {}][Current SegmentID: {}]", burstId, rootTraceId, requestTraceId, requestSegmentId);
                         } catch (Exception e) {
                             if (burstRequestSpan != null) {
                                 burstRequestSpan.log(e);
@@ -210,6 +216,7 @@ public class TravelServiceImpl implements TravelService {
                         } finally {
                             if (burstRequestSpan != null) {
                                 Tracer.stopSpan();
+                                LOGGER.info("[burst][Burst complete][Root TraceID: {}]", rootTraceId);
                             }
                         }
                     }));

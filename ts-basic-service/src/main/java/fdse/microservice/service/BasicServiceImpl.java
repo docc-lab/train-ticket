@@ -81,6 +81,12 @@ public class BasicServiceImpl implements BasicService {
     @Override
     public Response queryForTravel(Travel info, HttpHeaders headers) {
 
+        String traceId = TraceContext.traceId();
+        String segmentId = TraceContext.segmentId();
+        
+        LOGGER.info("[basic][Start travel query][TraceID: {}][SegmentID: {}]", 
+            traceId, segmentId);
+
         Response response = new Response<>();
         TravelResult result = new TravelResult();
         result.setStatus(true);

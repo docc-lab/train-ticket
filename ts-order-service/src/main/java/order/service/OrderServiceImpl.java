@@ -21,6 +21,13 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
+import org.apache.skywalking.apm.toolkit.trace.*;
+import org.apache.skywalking.apm.toolkit.trace.ActiveSpan;
+import org.apache.skywalking.apm.toolkit.trace.CallableWrapper;
+import org.apache.skywalking.apm.toolkit.trace.RunnableWrapper;
+import org.apache.skywalking.apm.toolkit.trace.TraceContext;
+import org.apache.skywalking.apm.toolkit.trace.ContextCarrierRef;
+
 import java.util.*;
 
 /**
@@ -56,6 +63,13 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     public Response getSoldTickets(Seat seatRequest, HttpHeaders headers) {
+        String traceId = TraceContext.traceId();
+        String segmentId = TraceContext.segmentId();
+        String sw8Header = headers.getFirst("sw8");
+        
+        LOGGER.info("[order][Processing ticket request][TraceID: {}][SegmentID: {}][Parent SW8: {}]",
+            traceId, segmentId, sw8Header);
+
         ArrayList<Order> list = orderRepository.findByTravelDateAndTrainNumber(seatRequest.getTravelDate(),
                 seatRequest.getTrainNumber());
         if (list != null && !list.isEmpty()) {

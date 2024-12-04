@@ -25,6 +25,7 @@ import org.apache.skywalking.apm.toolkit.trace.ActiveSpan;
 import org.apache.skywalking.apm.toolkit.trace.CallableWrapper;
 import org.apache.skywalking.apm.toolkit.trace.RunnableWrapper;
 import org.apache.skywalking.apm.toolkit.trace.TraceContext;
+import org.apache.skywalking.apm.toolkit.trace.ContextCarrierRef;
 
 import java.util.List;
 import java.util.Random;
@@ -192,7 +193,11 @@ public class SeatServiceImpl implements SeatService {
     @Override
     public Response distributeSeat(Seat seatRequest, HttpHeaders headers) {
         String traceId = TraceContext.traceId();
-        LOGGER.info("[distributeSeat][Distribute Seat][TraceId: {}]", traceId);
+        String segmentId = TraceContext.segmentId();
+        String sw8Header = headers.getFirst("sw8");
+
+        LOGGER.info("[seat][Received request][TraceID: {}][SegmentID: {}][SW8 Header: {}]",
+            traceId, segmentId, sw8Header);
 
         try {
             Response response = processDistributeSeat(seatRequest, headers);

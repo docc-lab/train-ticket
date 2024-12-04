@@ -57,14 +57,21 @@ public class AsyncConfig {
         };
     }
 
+    @LoadBalanced
     @Bean
-    public RestTemplate restTemplate() {
-        RestTemplate template = new RestTemplate();
+    public RestTemplate restTemplate(RestTemplateBuilder builder) {
+        RestTemplate template = builder.build();
         template.getInterceptors().add((request, body, execution) -> {
             String traceId = TraceContext.traceId();
-            LOGGER.debug("[RestTemplate][Adding trace headers][TraceID: {}]", traceId);
+            String segmentId = TraceContext.segmentId();
+            LOGGER.debug("[RestTemplate][Adding trace headers][TraceID: {}][SegmentID: {}]", traceId, segmentId);
+            
+            // Add all common trace headers
             request.getHeaders().set("sw8", traceId);
             request.getHeaders().set("sw8-correlation", traceId);
+            request.getHeaders().set("X-B3-TraceId", traceId);
+            request.getHeaders().set("X-B3-SpanId", segmentId);
+            
             return execution.execute(request, body);
         });
         return template;

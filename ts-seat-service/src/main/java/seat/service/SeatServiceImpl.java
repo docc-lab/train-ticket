@@ -194,62 +194,66 @@ public class SeatServiceImpl implements SeatService {
     public Response distributeSeat(Seat seatRequest, HttpHeaders headers) {
         String traceId = TraceContext.traceId();
         String segmentId = TraceContext.segmentId();
-        String parentTraceId = headers.getFirst("sw8-correlation-id");
+        String parentTraceId = headers.getFirst("sw8");
 
-        LOGGER.info("[seat][Received seat request][TraceID: {}][SegmentID: {}][Parent TraceID: {}]",
+        LOGGER.info("[seat][Received request][TraceID: {}][SegmentID: {}][Parent TraceID: {}]",
             traceId, segmentId, parentTraceId);
 
         try {
-            Response response = processDistributeSeat(seatRequest, headers);
+            // Create span for seat processing
+            SpanRef seatSpan = Tracer.createLocalSpan("seat.process");
+            seatSpan.tag("parent.traceId", parentTraceId);
 
-            // Log before burst processing
-            if (response != null && response.getStatus() == 1 && shouldStartBurst()) {
-                LOGGER.info("[seat][Starting burst processing][TraceID: {}][ParentTraceID: {}]",
-                    traceId, parentTraceId);
+            // Create carrier for downstream calls
+            ContextCarrierRef carrier = new ContextCarrierRef();
+            Tracer.inject(carrier);
+
+            // Prepare headers for order service call
+            HttpHeaders orderHeaders = new HttpHeaders();
+            if (headers != null) {
+                orderHeaders.putAll(headers);
             }
 
-            // If seat distribution was successful, check if we should do burst requests
-            if (response != null && response.getStatus() == 1 && shouldStartBurst()) {
-                String orderUrl;
-                if (seatRequest.getTrainNumber().startsWith("G") || seatRequest.getTrainNumber().startsWith("D")) {
-                    orderUrl = getServiceUrl("ts-order-service") + "/api/v1/orderservice/order/tickets";
-                } else {
-                    orderUrl = getServiceUrl("ts-order-other-service") + "/api/v1/orderOtherService/orderOther/tickets";
-                }
+            CarrierItemRef item = carrier.items();
+            while (item.hasNext()) {
+                item = item.next();
+                orderHeaders.set(item.getHeadKey(), item.getHeadValue());
+            }
 
-                HttpEntity<?> requestEntity = new HttpEntity<>(seatRequest, headers);
+            // Ensure SW8 correlation
+            orderHeaders.set("sw8", traceId);
 
-                for (int i = 0; i < BURST_DURATION_SECONDS; i++) {
-                    CountDownLatch latch = new CountDownLatch(BURST_REQUESTS_PER_SEC);
-                    final int burstGroup = i;
+            // Create request for order service
+            HttpEntity<?> orderRequest = new HttpEntity<>(seatRequest, orderHeaders);
 
-                    for (int j = 0; j < BURST_REQUESTS_PER_SEC; j++) {
-                        final int burstId = i * BURST_REQUESTS_PER_SEC + j + 1;
-                        taskExecutor.execute(RunnableWrapper.of(() -> {
-                            try {
-                                String workerTraceId = TraceContext.traceId();
-                                LOGGER.info("[seat][Burst worker started][Group: {}][BurstID: {}][WorkerTraceID: {}][ParentTraceID: {}]",
-                                    burstGroup, burstId, workerTraceId, parentTraceId);
-                                makeOrderRequest(orderUrl, requestEntity);
-                                LOGGER.info("[seat][Burst worker completed][BurstID: {}]", burstId);
-                            } catch (Exception e) {
-                                LOGGER.error("[seat][Burst worker failed][BurstID: {}][Error: {}]", burstId, e.getMessage());
-                            } finally {
-                                latch.countDown();
-                            }
-                        }));
-                    }
-
-                    if (!latch.await(1, TimeUnit.SECONDS)) {
-                        LOGGER.warn("[seat][Burst group timeout][Group: {}]", burstGroup);
-                    }
+            // Make order service call with propagated context
+            String orderServiceUrl = getServiceUrl("ts-order-service");
+            ResponseEntity<Response<LeftTicketInfo>> response;
+            
+            SpanRef orderSpan = null;
+            try {
+                orderSpan = Tracer.createExitSpan("query.order", "ts-order-service");
+                response = restTemplate.exchange(
+                    orderServiceUrl + "/api/v1/orderservice/order/tickets",
+                    HttpMethod.POST,  
+                    orderRequest,
+                    new ParameterizedTypeReference<Response<LeftTicketInfo>>() {}
+                );
+            } finally {
+                if (orderSpan != null) {
+                    Tracer.stopSpan();
                 }
             }
-            return response;
+
+            // Process response and continue with seat allocation
+            Response seatResponse = processDistributeSeat(seatRequest, response.getBody().getData());
+            
+            LOGGER.info("[seat][Request completed][TraceID: {}]", traceId);
+            return seatResponse;
 
         } catch (Exception e) {
-            LOGGER.error("[seat][Distribution failed][TraceID: {}][Error: {}]", traceId, e.getMessage());
-            return new Response<>(0, "Distribute seat failed: " + e.getMessage(), null);
+            LOGGER.error("[seat][Request failed][TraceID: {}][Error: {}]", traceId, e.getMessage());
+            throw e;
         }
     }
 

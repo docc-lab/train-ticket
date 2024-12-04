@@ -129,31 +129,27 @@ public class TravelServiceImpl implements TravelService {
 
     private void makeSeatRequest(String url, HttpEntity<?> request, int burstId) {
         String currentTraceId = TraceContext.traceId();
+        
         try {
-            // Explicitly propagate trace context
+            // Add trace context to request headers
             HttpHeaders headers = new HttpHeaders();
             headers.putAll(request.getHeaders());
-            headers.set("sw8", currentTraceId); // Skywalking trace context
+            headers.set("sw8", currentTraceId); // Skywalking trace context header
             
             HttpEntity<?> requestWithTrace = new HttpEntity<>(request.getBody(), headers);
             
-            ActiveSpan.tag("burst.id", String.valueOf(burstId));
+            // Add span tags for correlation
+            ActiveSpan.tag("burst.id", String.valueOf(burstId)); 
             ActiveSpan.tag("parent.traceId", currentTraceId);
 
             ResponseEntity<Response<Integer>> response = restTemplate.exchange(
                 url,
-                HttpMethod.POST,
+                HttpMethod.POST, 
                 requestWithTrace,
                 new ParameterizedTypeReference<Response<Integer>>() {}
             );
             
-            if (response.getBody() != null) {
-                LOGGER.debug("[makeSeatRequest][Burst request success][BurstId: {}][TraceId: {}]", 
-                    burstId, currentTraceId);
-            }
         } catch (Exception e) {
-            LOGGER.error("[makeSeatRequest][Burst request failed][BurstId: {}][TraceId: {}][Error: {}]", 
-                burstId, currentTraceId, e.getMessage());
             ActiveSpan.tag("error", "true");
             ActiveSpan.tag("error.message", e.getMessage());
             throw e;
@@ -172,18 +168,39 @@ public class TravelServiceImpl implements TravelService {
                 taskExecutor.execute(() -> {
                     try {
                         LOGGER.info("[executeRestTicketBurst][Burst request][BurstId: {}]", burstId);
+                        
+                        String currentTraceId = TraceContext.traceId();
+                        
+                        // Add trace context to headers
+                        HttpHeaders headers = new HttpHeaders();
+                        headers.putAll(request.getHeaders());
+                        headers.set("sw8", currentTraceId); // SkyWalking trace context
+                        
+                        HttpEntity<?> requestWithTrace = new HttpEntity<>(request.getBody(), headers);
+                        
+                        // Add span tags for correlation
+                        ActiveSpan.tag("burst.id", String.valueOf(burstId));
+                        ActiveSpan.tag("parent.traceId", currentTraceId);
+                        ActiveSpan.tag("cross_process.context", "burst-request");
 
-                        // Propagate the request
-                        restTemplate.exchange(
+                        ResponseEntity<Response<Integer>> response = restTemplate.exchange(
                             url,
                             HttpMethod.POST,
-                            request,
+                            requestWithTrace,
                             new ParameterizedTypeReference<Response<Integer>>() {}
                         );
+                        
+                        if (response.getBody() != null) {
+                            LOGGER.debug("[executeRestTicketBurst][Burst request success][BurstId: {}][TraceId: {}]", 
+                                burstId, currentTraceId);
+                        }
 
-                        LOGGER.info("[executeRestTicketBurst][Burst request sent][BurstId: {}]", burstId);
                     } catch (Exception e) {
-                        LOGGER.error("[executeRestTicketBurst][Burst request failed][BurstId: {}][Error: {}]", burstId, e.getMessage());
+                        LOGGER.error("[executeRestTicketBurst][Burst request failed][BurstId: {}][Error: {}]", 
+                            burstId, e.getMessage());
+                        ActiveSpan.tag("error", "true");
+                        ActiveSpan.tag("error.message", e.getMessage());
+                        throw e;
                     }
                 });
             }

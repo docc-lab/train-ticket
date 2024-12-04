@@ -58,7 +58,7 @@ public class TravelServiceImpl implements TravelService {
     private static final int BURST_REQUESTS_PER_SEC = 10;
     private static final int BURST_DURATION_SECONDS = 10;
     private static final int BURST_PERIOD_SECONDS = 60;
-    private static final int THREAD_POOL_SIZE = Math.max(1, BURST_REQUESTS_PER_SEC * 2);
+    private static final int THREAD_POOL_SIZE = Math.max(1, BURST_REQUESTS_PER_SEC * 3);
     
     // Executors for burst handling
     private ThreadPoolTaskExecutor taskExecutor;
@@ -93,9 +93,10 @@ public class TravelServiceImpl implements TravelService {
         this.taskExecutor = new ThreadPoolTaskExecutor();
         this.taskExecutor.setCorePoolSize(BURST_REQUESTS_PER_SEC);
         this.taskExecutor.setMaxPoolSize(THREAD_POOL_SIZE);
-        this.taskExecutor.setQueueCapacity(100);
+        this.taskExecutor.setQueueCapacity(500);
         this.taskExecutor.setThreadNamePrefix("travel-burst-worker-");
         this.taskExecutor.setTaskDecorator(traceContextDecorator);
+        this.taskExecutor.setAllowCoreThreadTimeOut(true);
         this.taskExecutor.initialize();
 
         this.taskScheduler = new ThreadPoolTaskScheduler();
@@ -117,8 +118,12 @@ public class TravelServiceImpl implements TravelService {
     private boolean shouldStartBurst() {
         long currentTime = Instant.now().getEpochSecond();
         long lastBurst = lastBurstTime.get();
-        return currentTime - lastBurst >= BURST_PERIOD_SECONDS && 
-            lastBurstTime.compareAndSet(lastBurst, currentTime);
+        boolean toReturn = currentTime - lastBurst >= BURST_PERIOD_SECONDS;
+
+        if (toReturn) {
+            lastBurstTime.set(currentTime);
+        }
+        return toReturn;
     }
 
     private void makeSeatRequest(String url, HttpEntity<?> request, int burstId) {
@@ -159,30 +164,57 @@ public class TravelServiceImpl implements TravelService {
         LOGGER.info("[executeRestTicketBurst][Starting burst requests][TraceId: {}]", traceId);
 
         for (int i = 0; i < BURST_DURATION_SECONDS; i++) {
-            CountDownLatch latch = new CountDownLatch(BURST_REQUESTS_PER_SEC);
-            
+            long startTime = System.currentTimeMillis(); // Record start time
+
             for (int j = 0; j < BURST_REQUESTS_PER_SEC; j++) {
                 final int burstId = i * BURST_REQUESTS_PER_SEC + j + 1;
+
                 taskExecutor.execute(() -> {
                     try {
-                        makeSeatRequest(url, request, burstId);
-                    } finally {
-                        latch.countDown();
+                        // Propagate trace context
+                        String currentTraceId = TraceContext.traceId();
+                        HttpHeaders headers = new HttpHeaders();
+                        headers.putAll(request.getHeaders());
+                        headers.set("sw8", currentTraceId);
+
+                        HttpEntity<?> requestWithTrace = new HttpEntity<>(request.getBody(), headers);
+
+                        ActiveSpan.tag("burst.id", String.valueOf(burstId));
+                        ActiveSpan.tag("parent.traceId", currentTraceId);
+
+                        // Send request
+                        restTemplate.exchange(
+                            url,
+                            HttpMethod.POST,
+                            requestWithTrace,
+                            new ParameterizedTypeReference<Response<Integer>>() {}
+                        );
+
+                        LOGGER.info("[executeRestTicketBurst][Burst request sent][BurstId: {}][TraceId: {}]", burstId, currentTraceId);
+                    } catch (Exception e) {
+                        LOGGER.error("[executeRestTicketBurst][Burst request failed][BurstId: {}][Error: {}]", burstId, e.getMessage());
                     }
                 });
             }
-            
-            try {
-                if (!latch.await(1, TimeUnit.SECONDS)) {
-                    LOGGER.warn("[executeRestTicketBurst][Burst requests timeout][Second: {}][TraceId: {}]", i, traceId);
+
+            // Calculate remaining time for this second
+            long elapsedTime = System.currentTimeMillis() - startTime;
+            long sleepTime = 1000 - elapsedTime; // Adjust for time already used
+
+            if (sleepTime > 0) {
+                try {
+                    Thread.sleep(sleepTime);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    LOGGER.error("[executeRestTicketBurst][Burst interrupted]");
+                    break;
                 }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                LOGGER.error("[executeRestTicketBurst][Burst interrupted][TraceId: {}]", traceId);
-                break;
+            } else {
+                LOGGER.warn("[executeRestTicketBurst][Burst execution took longer than 1 second]");
             }
         }
     }
+
 
     @Override
     public Response create(TravelInfo info, HttpHeaders headers) {

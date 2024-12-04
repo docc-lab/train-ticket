@@ -191,6 +191,10 @@ public class TravelServiceImpl implements TravelService {
                     taskExecutor.execute(RunnableWrapper.of(() -> {
                         SpanRef burstRequestSpan = null;
                         String requestTraceId = null;
+
+                        String requestTraceId = TraceContext.traceId();
+                        String requestSegmentId = TraceContext.segmentId();
+                        LOGGER.info("[burst][Worker thread][BurstID: {}][Parent TraceID: {}][Current TraceID: {}][Current SegmentID: {}]", burstId, rootTraceId, requestTraceId, requestSegmentId);
                         try {
                             // Create isolated span for this request
                             burstRequestSpan = Tracer.createLocalSpan("burst.request");
@@ -204,8 +208,6 @@ public class TravelServiceImpl implements TravelService {
                             burstRequestSpan.tag("burst.sequence", String.valueOf(burstSequence));
                             
                             makeSeatRequest(url, request, burstId);
-
-                             LOGGER.info("[burst][Worker thread][BurstID: {}][Parent TraceID: {}][Current TraceID: {}][Current SegmentID: {}]", burstId, rootTraceId, requestTraceId, requestSegmentId);
                         } catch (Exception e) {
                             if (burstRequestSpan != null) {
                                 burstRequestSpan.log(e);

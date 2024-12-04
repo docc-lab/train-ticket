@@ -14,18 +14,14 @@ public class AsyncConfig {
     public TaskDecorator traceContextDecorator() {
         return runnable -> {
             String parentTraceId = TraceContext.traceId();
-            return RunnableWrapper.of(() -> {
-                try {
-                    // Create new span with explicit parent reference
+            ContextSnapshot snapshot = Tracer.capture();
+            
+            return () -> {
+                try (ContextSnapshot.Scope scope = snapshot.activate()) {
                     ActiveSpan.tag("parent.traceId", parentTraceId);
-                    ActiveSpan.tag("cross_process.context", "burst-request");
                     runnable.run();
-                } catch (Exception e) {
-                    ActiveSpan.tag("error", "true");
-                    ActiveSpan.tag("error.message", e.getMessage());
-                    throw e;
                 }
-            });
+            };
         };
     }
 }

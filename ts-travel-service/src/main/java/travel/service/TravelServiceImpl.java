@@ -165,49 +165,50 @@ public class TravelServiceImpl implements TravelService {
         return toReturn;
     }
 
-    private void makeSeatRequest(String url, HttpEntity<?> request, int burstId) {
+    private void makeSeatRequest(String url, HttpEntity<?> request, int burstId, ContextSnapshotRef workerSnapshot) {
         SpanRef seatRequestSpan = null;
         try {
-            // Create exit span for downstream call
+            // Continue from worker context
+            Tracer.continued(workerSnapshot);
+            
+            // Create exit span
             seatRequestSpan = Tracer.createExitSpan("seat.request", "ts-seat-service");
+            seatRequestSpan.tag("burst.id", String.valueOf(burstId));
             
-            // Create a new context carrier
+            // Prepare context carrier
             ContextCarrierRef carrier = new ContextCarrierRef();
-            Tracer.inject(carrier); // Inject current context into carrier
+            Tracer.inject(carrier);
             
-            // Create new headers with trace context
+            // Create headers with trace context
             HttpHeaders headers = new HttpHeaders();
             if (request.getHeaders() != null) {
                 headers.putAll(request.getHeaders());
             }
             
-            // Add ALL carrier items to headers
+            // Add trace context headers
             CarrierItemRef item = carrier.items();
             while (item.hasNext()) {
                 item = item.next();
                 headers.set(item.getHeadKey(), item.getHeadValue());
             }
             
-            // Add custom correlation headers
-            headers.set("sw8-correlation-id", TraceContext.traceId());
-            headers.set("burst-id", String.valueOf(burstId));
-            
-            // Create new request with trace context
             HttpEntity<?> requestWithContext = new HttpEntity<>(
                 request.getBody(),
                 headers
             );
-            
+
+            LOGGER.debug("[makeSeatRequest][Sending request][BurstId: {}][TraceId: {}]", 
+                burstId, TraceContext.traceId());
+
             ResponseEntity<Response<Integer>> response = restTemplate.exchange(
                 url,
                 HttpMethod.POST,
                 requestWithContext,
                 new ParameterizedTypeReference<Response<Integer>>() {}
             );
+
+            LOGGER.debug("[makeSeatRequest][Request complete][BurstId: {}]", burstId);
             
-            LOGGER.debug("[makeSeatRequest][Request sent][TraceId: {}][BurstId: {}]", 
-                TraceContext.traceId(), burstId);
-                
         } catch (Exception e) {
             if (seatRequestSpan != null) {
                 seatRequestSpan.log(e);
@@ -226,8 +227,6 @@ public class TravelServiceImpl implements TravelService {
         final String rootSegmentId = TraceContext.segmentId();
         final ContextSnapshotRef contextSnapshot = Tracer.capture();
         
-        parentSpan.prepareForAsync(); // Mark span as async at the start
-        
         LOGGER.info("[burst][Starting burst requests][Root TraceID: {}][Root SegmentID: {}]", 
             rootTraceId, rootSegmentId);
 
@@ -235,34 +234,36 @@ public class TravelServiceImpl implements TravelService {
             for (int i = 0; i < BURST_DURATION_SECONDS; i++) {
                 final int burstGroup = i;
                 long startTime = System.currentTimeMillis();
-
                 CountDownLatch groupLatch = new CountDownLatch(BURST_REQUESTS_PER_SEC);
-                
+
                 for (int j = 0; j < BURST_REQUESTS_PER_SEC; j++) {
                     final int burstId = i * BURST_REQUESTS_PER_SEC + j + 1;
                     
                     taskExecutor.execute(RunnableWrapper.of(() -> {
-                        SpanRef burstSpan = null;
+                        SpanRef workerSpan = null;
                         try {
+                            // Continue from parent context
                             Tracer.continued(contextSnapshot);
                             
-                            burstSpan = Tracer.createLocalSpan("burst.worker");
-                            burstSpan.tag("burst.id", String.valueOf(burstId));
-                            burstSpan.tag("burst.group", String.valueOf(burstGroup));
-                            burstSpan.tag("root.traceId", rootTraceId);
-                            
-                            makeSeatRequest(url, request, burstId);
-                            
+                            // Create worker span
+                            workerSpan = Tracer.createLocalSpan("burst.worker");
+                            workerSpan.tag("burst.id", String.valueOf(burstId));
+                            workerSpan.tag("parent.traceId", rootTraceId);
+                            workerSpan.prepareForAsync(); // Mark worker span as async
+
+                            // Capture worker context for seat request
+                            ContextSnapshotRef workerSnapshot = Tracer.capture();
+                            makeSeatRequest(url, request, burstId, workerSnapshot);
+
                         } catch (Exception e) {
-                            if (burstSpan != null) {
-                                burstSpan.log(e);
-                                burstSpan.tag("error", "true");
-                                burstSpan.tag("error.message", e.getMessage());
-                            }
                             LOGGER.error("[burst][Worker failed][BurstID: {}][Error: {}]", burstId, e.getMessage());
+                            if (workerSpan != null) {
+                                workerSpan.log(e);
+                                workerSpan.tag("error", "true");
+                            }
                         } finally {
-                            if (burstSpan != null) {
-                                Tracer.stopSpan();
+                            if (workerSpan != null) {
+                                workerSpan.asyncFinish();
                             }
                             groupLatch.countDown();
                         }
@@ -280,10 +281,9 @@ public class TravelServiceImpl implements TravelService {
             }
         } catch (Exception e) {
             LOGGER.error("[burst][Burst execution failed][Error: {}]", e.getMessage());
-        } finally {
-            parentSpan.asyncFinish(); // Complete the async span once all bursts are done
         }
     }
+
 
 
     @Override

@@ -166,24 +166,33 @@ public class TravelServiceImpl implements TravelService {
     }
     }
 
-    private void executeRestTicketBurst(String url, HttpEntity<?> request) {
+    private void executeRestTicketBurst(String url, HttpEntity<?> request, SpanRef parentSpan) {
         String currentTraceId = TraceContext.traceId();
-        ActiveSpan.createSpan("execute.burst.requests").tag("parent.traceId", currentTraceId);
-        
+        ContextSnapshotRef contextSnapshot = Tracer.capture();
+
         try {
             for (int i = 0; i < BURST_DURATION_SECONDS; i++) {
                 long startTime = System.currentTimeMillis();
 
                 for (int j = 0; j < BURST_REQUESTS_PER_SEC; j++) {
                     final int burstId = i * BURST_REQUESTS_PER_SEC + j + 1;
+                    
                     taskExecutor.execute(() -> {
-                        ActiveSpan.createSpan("burst.request").tag("burst.id", String.valueOf(burstId));
-                        makeSeatRequest(url, request, burstId);
-                        ActiveSpan.stopSpan();
+                        SpanRef burstRequestSpan = null;
+                        try {
+                            burstRequestSpan = Tracer.createLocalSpan("burst.request");
+                            Tracer.continued(contextSnapshot);
+                            burstRequestSpan.tag("burst.id", String.valueOf(burstId));
+                            
+                            makeSeatRequest(url, request, burstId);
+                        } finally {
+                            if (burstRequestSpan != null) {
+                                Tracer.stopSpan();
+                            }
+                        }
                     });
                 }
 
-                // Sleep handling
                 long elapsedTime = System.currentTimeMillis() - startTime;
                 long sleepTime = 1000 - elapsedTime;
                 if (sleepTime > 0) {
@@ -191,14 +200,12 @@ public class TravelServiceImpl implements TravelService {
                 }
             }
         } catch (Exception e) {
-            ActiveSpan.tag("error", "true");
-            ActiveSpan.tag("error.message", e.getMessage());
+            LOGGER.error("[executeRestTicketBurst][Burst execution failed][Error: {}]", e.getMessage());
             throw e;
         } finally {
-            ActiveSpan.stopSpan();
+            parentSpan.asyncFinish();
         }
     }
-
 
 
     @Override
@@ -699,17 +706,22 @@ public class TravelServiceImpl implements TravelService {
     }
 
 
-    private int getRestTicketNumber(String travelDate, String trainNumber, 
-        String startStationName, String endStationName, int seatType, 
-        int totalNum, List<String> stationList, HttpHeaders headers) {
-        
-    String parentTraceId = TraceContext.traceId();
-    LOGGER.info("[getRestTicketNumber][Start query][TraceId: {}]", parentTraceId);
+    private int getRestTicketNumber(String travelDate, String trainNumber, String startStationName, String endStationName, int seatType, int totalNum, List<String> stationList, HttpHeaders headers) {
+            
+        String parentTraceId = TraceContext.traceId();
+        LOGGER.info("[getRestTicketNumber][Start query][TraceId: {}]", parentTraceId);
 
-    try {
-        // Create explicit span for seat request preparation
-        ActiveSpan.createSpan("prepare.seat.request").tag("parent.traceId", parentTraceId);
+        SpanRef rootSpan = null;
         try {
+            // Create entry span for the main operation
+            rootSpan = Tracer.createEntrySpan("get.rest.ticket", null);
+            rootSpan.tag("train.number", trainNumber);
+            rootSpan.tag("parent.traceId", parentTraceId);
+
+            // Create local span for seat request preparation
+            SpanRef prepareSpan = Tracer.createLocalSpan("prepare.seat.request");
+            prepareSpan.tag("parent.traceId", parentTraceId);
+            
             Seat seatRequest = new Seat();
             seatRequest.setDestStation(endStationName);
             seatRequest.setStartStation(startStationName);
@@ -719,22 +731,19 @@ public class TravelServiceImpl implements TravelService {
             seatRequest.setTotalNum(totalNum);
             seatRequest.setStations(stationList);
 
-            // Add trace context to headers
             HttpHeaders requestHeaders = new HttpHeaders();
             if (headers != null) {
                 requestHeaders.putAll(headers);
             }
             requestHeaders.set("sw8", parentTraceId);
-
             HttpEntity<?> requestEntity = new HttpEntity<>(seatRequest, requestHeaders);
-            String url = getServiceUrl("ts-seat-service") + "/api/v1/seatservice/seats/left_tickets";
             
-            // Create explicit span for main request
-            ActiveSpan.stopSpan(); // End prepare span
-            ActiveSpan.createSpan("get.rest.ticket.main")
-                .tag("parent.traceId", parentTraceId)
-                .tag("train.number", trainNumber)
-                .tag("seat.type", String.valueOf(seatType));
+            Tracer.stopSpan(); // Stop prepare span
+
+            // Create exit span for seat service call
+            String url = getServiceUrl("ts-seat-service") + "/api/v1/seatservice/seats/left_tickets";
+            SpanRef exitSpan = Tracer.createExitSpan("query.seat.tickets", "ts-seat-service");
+            exitSpan.tag("seat.type", String.valueOf(seatType));
 
             ResponseEntity<Response<Integer>> response = restTemplate.exchange(
                 url,
@@ -742,21 +751,20 @@ public class TravelServiceImpl implements TravelService {
                 requestEntity,
                 new ParameterizedTypeReference<Response<Integer>>() {}
             );
+            
+            Tracer.stopSpan(); // Stop exit span
 
-            ActiveSpan.stopSpan(); // End main request span
-
-            // Burst requests handled by TaskDecorator 
+            // Handle burst requests if needed
             if (response.getBody() != null && response.getBody().getStatus() == 1 
                 && shouldStartBurst()) {
-                // Create explicit span for burst initialization
-                ActiveSpan.createSpan("init.burst.requests")
-                    .tag("parent.traceId", parentTraceId)
-                    .tag("burst.count", String.valueOf(BURST_REQUESTS_PER_SEC * BURST_DURATION_SECONDS));
+                SpanRef burstSpan = Tracer.createLocalSpan("init.burst.requests");
+                burstSpan.tag("burst.count", String.valueOf(BURST_REQUESTS_PER_SEC * BURST_DURATION_SECONDS));
+                burstSpan.prepareForAsync(); // Keep span alive for async operations
 
                 LOGGER.info("[getRestTicketNumber][Starting burst requests][TraceId: {}]", parentTraceId);
-                executeRestTicketBurst(url, requestEntity);
+                executeRestTicketBurst(url, requestEntity, burstSpan);
                 
-                ActiveSpan.stopSpan(); // End burst init span
+                Tracer.stopSpan(); // Stop burst span
             }
 
             if (response.getBody() != null) {
@@ -767,16 +775,19 @@ public class TravelServiceImpl implements TravelService {
             return 0;
 
         } catch (Exception e) {
-            ActiveSpan.tag("error", "true");
-            ActiveSpan.tag("error.message", e.getMessage());
-            throw e;
+            if (rootSpan != null) {
+                rootSpan.log(e);
+                rootSpan.tag("error", "true");
+                rootSpan.tag("error.message", e.getMessage());
+            }
+            LOGGER.error("[getRestTicketNumber][Query failed][TraceId: {}][Error: {}]", 
+                parentTraceId, e.getMessage());
+            return 0;
+        } finally {
+            if (rootSpan != null) {
+                Tracer.stopSpan();
+            }
         }
-
-    } catch (Exception e) {
-        LOGGER.error("[getRestTicketNumber][Query failed][TraceId: {}][Error: {}]", 
-            parentTraceId, e.getMessage());
-        return 0;
-    }
     }
 
     @Override

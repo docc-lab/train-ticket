@@ -111,12 +111,47 @@ public class TravelServiceImpl implements TravelService {
 
     @PreDestroy
     public void cleanup() {
+        LOGGER.info("[cleanup][Starting graceful shutdown]");
+        
+        // Shutdown task executor
         if (taskExecutor != null) {
             taskExecutor.shutdown();
+            try {
+                // Wait for existing tasks to terminate
+                if (!taskExecutor.getThreadPoolExecutor().awaitTermination(30, TimeUnit.SECONDS)) {
+                    LOGGER.warn("[cleanup][Tasks didn't complete in time, forcing shutdown]");
+                    taskExecutor.getThreadPoolExecutor().shutdownNow();
+                    
+                    // Wait a while for tasks to respond to being cancelled
+                    if (!taskExecutor.getThreadPoolExecutor().awaitTermination(10, TimeUnit.SECONDS)) {
+                        LOGGER.error("[cleanup][Thread pool did not terminate]");
+                    }
+                }
+            } catch (InterruptedException e) {
+                // (Re-)Cancel if current thread also interrupted
+                taskExecutor.getThreadPoolExecutor().shutdownNow();
+                // Preserve interrupt status
+                Thread.currentThread().interrupt();
+                LOGGER.error("[cleanup][Shutdown interrupted]", e);
+            }
         }
+        
+        // Shutdown scheduler
         if (taskScheduler != null) {
             taskScheduler.shutdown();
+            try {
+                if (!taskScheduler.getScheduledThreadPoolExecutor().awaitTermination(10, TimeUnit.SECONDS)) {
+                    LOGGER.warn("[cleanup][Scheduler didn't complete in time, forcing shutdown]");
+                    taskScheduler.getScheduledThreadPoolExecutor().shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                taskScheduler.getScheduledThreadPoolExecutor().shutdownNow();
+                Thread.currentThread().interrupt();
+                LOGGER.error("[cleanup][Scheduler shutdown interrupted]", e);
+            }
         }
+        
+        LOGGER.info("[cleanup][Graceful shutdown completed]");
     }
 
     private boolean shouldStartBurst() {
@@ -131,59 +166,61 @@ public class TravelServiceImpl implements TravelService {
     }
 
     private void makeSeatRequest(String url, HttpEntity<?> request, int burstId) {
-        // Make these final to be used in lambda
-        final String currentTraceId = TraceContext.traceId();
-        final String currentSegmentId = TraceContext.segmentId();
-        final SpanRef seatRequestSpan = Tracer.createExitSpan("seat.request", "ts-seat-service");
-        
+        SpanRef seatRequestSpan = null;
         try {
+            // Create exit span for downstream call
+            seatRequestSpan = Tracer.createExitSpan("seat.request", "ts-seat-service");
+            seatRequestSpan.tag("burst.id", String.valueOf(burstId));
+            
+            // Prepare headers with trace context
             ContextCarrierRef carrier = new ContextCarrierRef();
-            Tracer.inject(carrier); // Let SkyWalking handle the header format
+            Tracer.inject(carrier);
             
-            // Add trace context to request headers
             HttpHeaders headers = new HttpHeaders();
-            headers.putAll(request.getHeaders());
+            if (request.getHeaders() != null) {
+                headers.putAll(request.getHeaders());
+            }
             
-            CarrierItemRef item = carrier.items(); // Extract and set all carrier items
+            // Add trace context to headers
+            CarrierItemRef item = carrier.items();
             while (item.hasNext()) {
                 item = item.next();
                 headers.set(item.getHeadKey(), item.getHeadValue());
             }
             
-            HttpEntity<?> requestWithTrace = new HttpEntity<>(request.getBody(), headers);
+            HttpEntity<?> requestWithContext = new HttpEntity<>(request.getBody(), headers);
             
-            // Add correlation tags
-            seatRequestSpan.tag("burst.id", String.valueOf(burstId)); 
-            seatRequestSpan.tag("parent.traceId", currentTraceId);
-
             ResponseEntity<Response<Integer>> response = restTemplate.exchange(
                 url,
-                HttpMethod.POST, 
-                requestWithTrace,
+                HttpMethod.POST,
+                requestWithContext,
                 new ParameterizedTypeReference<Response<Integer>>() {}
             );
             
             if (response.getBody() != null) {
-                LOGGER.debug("[makeSeatRequest][Burst request success][BurstId: {}][TraceId: {}]",
-                    burstId, currentTraceId);
+                LOGGER.debug("[makeSeatRequest][Request success][BurstId: {}]", burstId);
             }
             
         } catch (Exception e) {
-            LOGGER.error("[makeSeatRequest][Burst request failed][BurstId: {}][Error: {}]", 
-                burstId, e.getMessage());
-            seatRequestSpan.log(e);
-            seatRequestSpan.tag("error", "true");
-            seatRequestSpan.tag("error.message", e.getMessage());
+            if (seatRequestSpan != null) {
+                seatRequestSpan.log(e);
+                seatRequestSpan.tag("error", "true");
+                seatRequestSpan.tag("error.message", e.getMessage());
+            }
             throw e;
         } finally {
-            Tracer.stopSpan();
+            if (seatRequestSpan != null) {
+                Tracer.stopSpan();
+            }
         }
     }
 
     private void executeRestTicketBurst(String url, HttpEntity<?> request, SpanRef parentSpan) {
         final String rootTraceId = TraceContext.traceId();
         final String rootSegmentId = TraceContext.segmentId();
-        parentSpan.prepareForAsync();
+        final ContextSnapshotRef contextSnapshot = Tracer.capture();
+        
+        parentSpan.prepareForAsync(); // Mark span as async at the start
         
         LOGGER.info("[burst][Starting burst requests][Root TraceID: {}][Root SegmentID: {}]", 
             rootTraceId, rootSegmentId);
@@ -193,56 +230,52 @@ public class TravelServiceImpl implements TravelService {
                 final int burstGroup = i;
                 long startTime = System.currentTimeMillis();
 
+                CountDownLatch groupLatch = new CountDownLatch(BURST_REQUESTS_PER_SEC);
+                
                 for (int j = 0; j < BURST_REQUESTS_PER_SEC; j++) {
                     final int burstId = i * BURST_REQUESTS_PER_SEC + j + 1;
-                    final int burstSequence = j;
                     
                     taskExecutor.execute(RunnableWrapper.of(() -> {
-                        SpanRef burstRequestSpan = null;
-
-                        String requestTraceId = TraceContext.traceId();
-                        String requestSegmentId = TraceContext.segmentId();
-                        LOGGER.info("[burst][Worker thread][BurstID: {}][Parent TraceID: {}][Current TraceID: {}][Current SegmentID: {}]", burstId, rootTraceId, requestTraceId, requestSegmentId);
+                        SpanRef burstSpan = null;
                         try {
-                            // Create isolated span for this request
-                            burstRequestSpan = Tracer.createLocalSpan("burst.request");
-                            requestTraceId = TraceContext.traceId();
+                            Tracer.continued(contextSnapshot);
                             
-                            // Add correlation tags
-                            burstRequestSpan.tag("burst.id", String.valueOf(burstId));
-                            burstRequestSpan.tag("root.traceId", rootTraceId);
-                            burstRequestSpan.tag("request.traceId", requestTraceId);
-                            burstRequestSpan.tag("burst.group", String.valueOf(burstGroup));
-                            burstRequestSpan.tag("burst.sequence", String.valueOf(burstSequence));
+                            burstSpan = Tracer.createLocalSpan("burst.worker");
+                            burstSpan.tag("burst.id", String.valueOf(burstId));
+                            burstSpan.tag("burst.group", String.valueOf(burstGroup));
+                            burstSpan.tag("root.traceId", rootTraceId);
                             
                             makeSeatRequest(url, request, burstId);
+                            
                         } catch (Exception e) {
-                            if (burstRequestSpan != null) {
-                                burstRequestSpan.log(e);
-                                burstRequestSpan.tag("error", "true");
-                                burstRequestSpan.tag("error.message", e.getMessage());
+                            if (burstSpan != null) {
+                                burstSpan.log(e);
+                                burstSpan.tag("error", "true");
+                                burstSpan.tag("error.message", e.getMessage());
                             }
-                            throw e;
+                            LOGGER.error("[burst][Worker failed][BurstID: {}][Error: {}]", burstId, e.getMessage());
                         } finally {
-                            if (burstRequestSpan != null) {
+                            if (burstSpan != null) {
                                 Tracer.stopSpan();
-                                LOGGER.info("[burst][Burst complete][Root TraceID: {}]", rootTraceId);
                             }
+                            groupLatch.countDown();
                         }
                     }));
                 }
 
-                // Maintain burst rate
+                if (!groupLatch.await(1, TimeUnit.SECONDS)) {
+                    LOGGER.warn("[burst][Group timeout][Group: {}]", burstGroup);
+                }
+
                 long elapsedTime = System.currentTimeMillis() - startTime;
-                long sleepTime = 1000 - elapsedTime;
-                if (sleepTime > 0) {
-                    Thread.sleep(sleepTime);
+                if (elapsedTime < 1000) {
+                    Thread.sleep(1000 - elapsedTime);
                 }
             }
         } catch (Exception e) {
-            LOGGER.error("[executeRestTicketBurst][Burst execution failed][Error: {}]", e.getMessage());
+            LOGGER.error("[burst][Burst execution failed][Error: {}]", e.getMessage());
         } finally {
-            parentSpan.asyncFinish();
+            parentSpan.asyncFinish(); // Complete the async span once all bursts are done
         }
     }
 

@@ -13,6 +13,7 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.stereotype.Service;
@@ -547,7 +548,8 @@ public class BasicServiceImpl implements BasicService {
         }
     }
 
-    private void makeRouteRequest(String url, HttpEntity<List<String>> request) {
+    @Async
+    protected void makeRouteRequest(String url, HttpEntity<List<String>> request) {
         ResponseEntity<Response> response = restTemplate.exchange(
             url + "/api/v1/routeservice/routes/byIds/",
             HttpMethod.POST, 

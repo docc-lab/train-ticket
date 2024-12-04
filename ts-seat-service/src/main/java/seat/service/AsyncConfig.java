@@ -10,7 +10,8 @@ import org.apache.skywalking.apm.toolkit.trace.TraceContext;
 import org.apache.skywalking.apm.toolkit.trace.Tracer;
 import org.apache.skywalking.apm.toolkit.trace.ContextSnapshotRef;
 import org.apache.skywalking.apm.toolkit.trace.SpanRef;
-
+import org.springframework.web.context.request.RequestAttributes;
+import org.springframework.web.context.request.RequestContextHolder;
 
 @Configuration
 public class AsyncConfig {
@@ -20,42 +21,36 @@ public class AsyncConfig {
     @Bean
     public TaskDecorator traceContextDecorator() {
         return runnable -> {
-            // Capture all current context information
+            // Capture context from parent thread
             String parentTraceId = TraceContext.traceId();
             String parentSegmentId = TraceContext.segmentId();
+            RequestAttributes requestAttributes = RequestContextHolder.getRequestAttributes();
             ContextSnapshotRef contextSnapshot = Tracer.capture();
             
             return RunnableWrapper.of(() -> {
-                SpanRef asyncSpan = null;
                 try {
-                    // Continue the trace context in the new thread
+                    // Restore request context
+                    RequestContextHolder.setRequestAttributes(requestAttributes);
+                    
+                    // Continue trace context in worker thread
                     Tracer.continued(contextSnapshot);
                     
-                    // Create new span for async work
-                    asyncSpan = Tracer.createLocalSpan("async.task");
+                    // Create span for async work
+                    SpanRef asyncSpan = Tracer.createLocalSpan("async.task");
                     asyncSpan.tag("parent.traceId", parentTraceId);
                     asyncSpan.tag("parent.segmentId", parentSegmentId);
                     asyncSpan.tag("async.thread", Thread.currentThread().getName());
                     
-                    LOGGER.debug("[AsyncTask][Context continued][TraceID: {}][Thread: {}]",
-                        TraceContext.traceId(), Thread.currentThread().getName());
+                    // Log context continuation
+                    String currentTraceId = TraceContext.traceId();
+                    LOGGER.debug("[AsyncTask][Context continued][Parent TraceID: {}][Current TraceID: {}][Thread: {}]",
+                        parentTraceId, currentTraceId, Thread.currentThread().getName());
                     
-                    // Execute the actual task
                     runnable.run();
                     
-                } catch (Exception e) {
-                    if (asyncSpan != null) {
-                        asyncSpan.log(e);
-                        asyncSpan.tag("error", "true");
-                        asyncSpan.tag("error.message", e.getMessage());
-                    }
-                    LOGGER.error("[AsyncTask][Execution failed][TraceID: {}][Error: {}]",
-                        TraceContext.traceId(), e.getMessage());
-                    throw e;
                 } finally {
-                    if (asyncSpan != null) {
-                        Tracer.stopSpan();
-                    }
+                    RequestContextHolder.resetRequestAttributes();
+                    Tracer.stopSpan();
                 }
             });
         };

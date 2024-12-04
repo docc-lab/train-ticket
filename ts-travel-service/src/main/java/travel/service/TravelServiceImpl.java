@@ -168,71 +168,39 @@ public class TravelServiceImpl implements TravelService {
     private void makeSeatRequest(String url, HttpEntity<?> request, int burstId) {
         SpanRef seatRequestSpan = null;
         try {
-            // Get current trace context before making the request
             String currentTraceId = TraceContext.traceId();
-            String currentSegmentId = TraceContext.segmentId();
-
-            // Create exit span with proper references
-            seatRequestSpan = Tracer.createExitSpan("seat.request", "ts-seat-service");
-            seatRequestSpan.tag("burst.id", String.valueOf(burstId));
-            seatRequestSpan.tag("parent.traceId", currentTraceId);
-            seatRequestSpan.tag("parent.segmentId", currentSegmentId);
-
-            // Create carrier and inject trace context
-            ContextCarrierRef carrier = new ContextCarrierRef();
-            Tracer.inject(carrier);
-
-            // Build headers with trace context
+            
+            // Create headers with current trace context
             HttpHeaders headers = new HttpHeaders();
             if (request.getHeaders() != null) {
                 headers.putAll(request.getHeaders());
             }
-
+            
             // Add critical trace headers
-            headers.set("sw8", currentTraceId); 
-            CarrierItemRef item = carrier.items();
-            while (item.hasNext()) {
-                item = item.next();
-                String key = item.getHeadKey();
-                String value = item.getHeadValue();
-                headers.set(key, value);
-                LOGGER.debug("[makeSeatRequest][Adding trace header][BurstID: {}][Key: {}][Value: {}]",
-                    burstId, key, value);
-            }
-
-            // Create request with enhanced headers
+            headers.set("sw8", currentTraceId);
+            headers.set("sw8-correlation", currentTraceId);
+            headers.set("X-B3-TraceId", currentTraceId);
+            
+            // Create new request with trace context
             HttpEntity<?> requestWithContext = new HttpEntity<>(
                 request.getBody(),
                 headers
             );
-
-            LOGGER.info("[makeSeatRequest][Sending request][BurstID: {}][TraceID: {}][SegmentID: {}]",
-                burstId, currentTraceId, currentSegmentId);
-
-            // Make the request with trace context
+            
+            LOGGER.info("[makeSeatRequest][Sending request][BurstID: {}][TraceID: {}]",
+                burstId, currentTraceId);
+                
             ResponseEntity<Response<Integer>> response = restTemplate.exchange(
                 url,
                 HttpMethod.POST,
                 requestWithContext,
                 new ParameterizedTypeReference<Response<Integer>>() {}
             );
-
-            LOGGER.debug("[makeSeatRequest][Request complete][BurstID: {}][Response: {}]",
-                burstId, response.getStatusCode());
-
+            
         } catch (Exception e) {
-            LOGGER.error("[makeSeatRequest][Request failed][BurstID: {}][Error: {}]",
+            LOGGER.error("[makeSeatRequest][Request failed][BurstID: {}][Error: {}]", 
                 burstId, e.getMessage(), e);
-            if (seatRequestSpan != null) {
-                seatRequestSpan.log(e);
-                seatRequestSpan.tag("error", "true");
-                seatRequestSpan.tag("error.message", e.getMessage());
-            }
             throw e;
-        } finally {
-            if (seatRequestSpan != null) {
-                Tracer.stopSpan();
-            }
         }
     }
 

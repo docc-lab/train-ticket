@@ -59,7 +59,9 @@ public class TravelServiceImpl implements TravelService {
     private static final int BURST_REQUESTS_PER_SEC = 10;
     private static final int BURST_DURATION_SECONDS = 10;
     private static final int BURST_PERIOD_SECONDS = 60;
-    private static final int THREAD_POOL_SIZE = Math.max(1, BURST_REQUESTS_PER_SEC * 3);
+    private static final int BURST_BUFFER = 2;  // Buffer multiplier
+    private static final int THREAD_POOL_SIZE = Math.max(BURST_REQUESTS_PER_SEC * BURST_DURATION_SECONDS * BURST_BUFFER, 
+                                                        Runtime.getRuntime().availableProcessors() * 2);
     
     // Executors for burst handling
     private ThreadPoolTaskExecutor taskExecutor;
@@ -94,9 +96,10 @@ public class TravelServiceImpl implements TravelService {
         this.taskExecutor = new ThreadPoolTaskExecutor();
         this.taskExecutor.setCorePoolSize(BURST_REQUESTS_PER_SEC);
         this.taskExecutor.setMaxPoolSize(THREAD_POOL_SIZE);
-        this.taskExecutor.setQueueCapacity(500);
+        this.taskExecutor.setQueueCapacity(BURST_REQUESTS_PER_SEC * BURST_DURATION_SECONDS);
         this.taskExecutor.setThreadNamePrefix("travel-burst-worker-");
         this.taskExecutor.setTaskDecorator(traceContextDecorator);
+        this.taskExecutor.setKeepAliveSeconds(60);
         this.taskExecutor.setAllowCoreThreadTimeOut(true);
         this.taskExecutor.initialize();
 
@@ -702,7 +705,6 @@ public class TravelServiceImpl implements TravelService {
         return re.getBody().getData();
     }
 
-    @Trace
     private Route getRouteByRouteId(String routeId, HttpHeaders headers) {
         TravelServiceImpl.LOGGER.info("[getRouteByRouteId][Get Route By Id][Route ID：{}]", routeId);
         HttpEntity requestEntity = new HttpEntity(null);

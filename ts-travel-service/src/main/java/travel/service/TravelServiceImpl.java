@@ -226,7 +226,7 @@ public class TravelServiceImpl implements TravelService {
         final String rootTraceId = TraceContext.traceId();
         final String rootSegmentId = TraceContext.segmentId();
         final ContextSnapshotRef contextSnapshot = Tracer.capture();
-        
+
         LOGGER.info("[burst][Starting burst requests][Root TraceID: {}][Root SegmentID: {}]", 
             rootTraceId, rootSegmentId);
 
@@ -242,18 +242,40 @@ public class TravelServiceImpl implements TravelService {
                     taskExecutor.execute(RunnableWrapper.of(() -> {
                         SpanRef workerSpan = null;
                         try {
-                            // Continue from parent context
+                            // Continue parent context in worker thread
+                            ContextCarrierRef carrier = new ContextCarrierRef();
                             Tracer.continued(contextSnapshot);
+                            Tracer.inject(carrier);
                             
+                            // Create headers with trace context
+                            HttpHeaders headers = new HttpHeaders();
+                            if (request.getHeaders() != null) {
+                                headers.putAll(request.getHeaders());
+                            }
+                            
+                            // Add trace context to headers
+                            CarrierItemRef item = carrier.items();
+                            while (item.hasNext()) {
+                                item = item.next();
+                                headers.set(item.getHeadKey(), item.getHeadValue());
+                            }
+
                             // Create worker span
                             workerSpan = Tracer.createLocalSpan("burst.worker");
                             workerSpan.tag("burst.id", String.valueOf(burstId));
+                            workerSpan.tag("burst.group", String.valueOf(burstGroup));
                             workerSpan.tag("parent.traceId", rootTraceId);
-                            workerSpan.prepareForAsync(); // Mark worker span as async
 
-                            // Capture worker context for seat request
-                            ContextSnapshotRef workerSnapshot = Tracer.capture();
-                            makeSeatRequest(url, request, burstId, workerSnapshot);
+                            // Create new request with trace context
+                            HttpEntity<?> requestWithContext = new HttpEntity<>(
+                                request.getBody(),
+                                headers
+                            );
+
+                            LOGGER.debug("[burst][Worker executing][BurstID: {}][TraceId: {}]", 
+                                burstId, TraceContext.traceId());
+
+                            makeSeatRequest(url, requestWithContext, burstId);
 
                         } catch (Exception e) {
                             LOGGER.error("[burst][Worker failed][BurstID: {}][Error: {}]", burstId, e.getMessage());
@@ -263,7 +285,7 @@ public class TravelServiceImpl implements TravelService {
                             }
                         } finally {
                             if (workerSpan != null) {
-                                workerSpan.asyncFinish();
+                                Tracer.stopSpan();
                             }
                             groupLatch.countDown();
                         }

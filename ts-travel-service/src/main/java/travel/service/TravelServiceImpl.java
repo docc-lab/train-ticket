@@ -132,14 +132,23 @@ public class TravelServiceImpl implements TravelService {
 
     private void makeSeatRequest(String url, HttpEntity<?> request, int burstId) {
         // Make these final to be used in lambda
-        final SpanRef seatRequestSpan = Tracer.createExitSpan("seat.request", "ts-seat-service");
         final String currentTraceId = TraceContext.traceId();
+        final String currentSegmentId = TraceContext.segmentId();
+        final SpanRef seatRequestSpan = Tracer.createExitSpan("seat.request", "ts-seat-service");
         
         try {
+            ContextCarrierRef carrier = new ContextCarrierRef();
+            Tracer.inject(carrier); // Let SkyWalking handle the header format
+            
             // Add trace context to request headers
             HttpHeaders headers = new HttpHeaders();
             headers.putAll(request.getHeaders());
-            headers.set("sw8", currentTraceId);
+            
+            CarrierItemRef item = carrier.items(); // Extract and set all carrier items
+            while (item.hasNext()) {
+                item = item.next();
+                headers.set(item.getHeadKey(), item.getHeadValue());
+            }
             
             HttpEntity<?> requestWithTrace = new HttpEntity<>(request.getBody(), headers);
             

@@ -25,6 +25,7 @@ import travel2.entity.Trip;
 import travel2.entity.Travel;
 import travel2.entity.TripAllDetail;
 import travel2.repository.TripRepository;
+import travel2.exception.ServiceException;
 
 import javax.transaction.Transactional;
 import java.util.*;
@@ -59,7 +60,7 @@ public class TravelServiceImpl implements TravelService {
     String success = "Success";
     String noCnontent = "No Content";
 
-    private ResponseEntity<Response> executeWithCircuitBreaker(String serviceName, String url, HttpMethod method, HttpEntity<?> request, ParameterizedTypeReference<Response> responseType) {
+    private <T> ResponseEntity<Response<T>> executeWithCircuitBreaker(String serviceName, String url, HttpMethod method, HttpEntity<?> request, ParameterizedTypeReference<Response<T>> responseType) {
         CircuitBreaker circuitBreaker = circuitBreakerFactory.create(serviceName);
         
         try {
@@ -67,13 +68,13 @@ public class TravelServiceImpl implements TravelService {
                 () -> restTemplate.exchange(url, method, request, responseType),
                 throwable -> {
                     LOGGER.error("[CircuitBreaker][Service: {}][Error: {}]", serviceName, throwable.getMessage());
-                    Response errorResponse = new Response<>(0, "Service temporarily unavailable: " + serviceName, null);
+                    Response<T> errorResponse = new Response<>(0, "Service temporarily unavailable: " + serviceName, null);
                     return ResponseEntity.ok(errorResponse);
                 }
             );
         } catch (Exception e) {
             LOGGER.error("[CircuitBreaker][Service: {}][Error: {}]", serviceName, e.getMessage());
-            Response errorResponse = new Response<>(0, "Service temporarily unavailable: " + serviceName, null);
+            Response<T> errorResponse = new Response<>(0, "Service temporarily unavailable: " + serviceName, null);
             return ResponseEntity.ok(errorResponse);
         }
     }
@@ -298,29 +299,21 @@ public class TravelServiceImpl implements TravelService {
         try {
             HttpEntity requestEntity = new HttpEntity(infos, null);
             String basic_service_url = getServiceUrl("ts-basic-service");
-            ResponseEntity<Response> re = executeWithCircuitBreaker(
+            ResponseEntity<Response<Map<String, TravelResult>>> re = executeWithCircuitBreaker(
                     "ts-basic-service",
                     basic_service_url + "/api/v1/basicservice/basic/travels",
                     HttpMethod.POST,
                     requestEntity,
-                    new ParameterizedTypeReference<Response>() {});
+                    new ParameterizedTypeReference<Response<Map<String, TravelResult>>>() {});
 
-            Response r = re.getBody();
+            Response<Map<String, TravelResult>> r = re.getBody();
             if(r.getStatus() == 0){
                 TravelServiceImpl.LOGGER.info("[getTicketsByBatch][Ts-basic-service response status is 0][response is: {}]", r);
                 return responses;
             }
-            Map<String, TravelResult> trMap;
-            ObjectMapper mapper = new ObjectMapper();
-            try{
-                trMap = mapper.readValue(JsonUtils.object2Json(r.getData()), new TypeReference<Map<String, TravelResult>>(){});
-            }catch(Exception e) {
-                TravelServiceImpl.LOGGER.warn("[getTicketsByBatch][Ts-basic-service convert data failed][Fail msg: {}]", e.getMessage());
-                return responses;
-            }
-
+            
+            Map<String, TravelResult> trMap = r.getData();
             for(Map.Entry<String, TravelResult> trEntry: trMap.entrySet()){
-                //Set the returned ticket information
                 String tripNumber = trEntry.getKey();
                 TravelResult tr = trEntry.getValue();
                 Trip trip = tripMap.get(tripNumber);

@@ -6,6 +6,10 @@ import org.springframework.core.task.TaskDecorator;
 import org.apache.skywalking.apm.toolkit.trace.RunnableWrapper;
 import org.apache.skywalking.apm.toolkit.trace.TraceContext;
 import org.apache.skywalking.apm.toolkit.trace.ActiveSpan;
+import org.apache.skywalking.apm.toolkit.trace.ContextCarrierRef;
+import org.apache.skywalking.apm.toolkit.trace.Tracer;
+import org.apache.skywalking.apm.toolkit.trace.ContextSnapshotRef;
+import org.apache.skywalking.apm.toolkit.trace.SpanRef;
 
 public class AsyncConfig {
     @Bean

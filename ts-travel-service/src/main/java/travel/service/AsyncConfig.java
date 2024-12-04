@@ -5,11 +5,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.task.TaskDecorator;
-import org.apache.skywalking.apm.toolkit.trace.CallableWrapper;
 import org.apache.skywalking.apm.toolkit.trace.RunnableWrapper;
 import org.apache.skywalking.apm.toolkit.trace.TraceContext;
-import org.apache.skywalking.apm.toolkit.trace.ActiveSpan;
-import org.apache.skywalking.apm.toolkit.trace.ContextCarrierRef;
 import org.apache.skywalking.apm.toolkit.trace.Tracer;
 import org.apache.skywalking.apm.toolkit.trace.ContextSnapshotRef;
 import org.apache.skywalking.apm.toolkit.trace.SpanRef;
@@ -28,18 +25,6 @@ public class AsyncConfig {
             String parentSegmentId = TraceContext.segmentId();
             ContextSnapshotRef contextSnapshot = Tracer.capture();
             
-            // Create carrier for potential downstream calls
-            ContextCarrierRef carrier = new ContextCarrierRef();
-            Tracer.inject(carrier);
-            
-            // Store all carrier items for propagation
-            Map<String, String> contextItems = new HashMap<>();
-            CarrierItemRef item = carrier.items();
-            while (item.hasNext()) {
-                item = item.next();
-                contextItems.put(item.getHeadKey(), item.getHeadValue());
-            }
-            
             return RunnableWrapper.of(() -> {
                 SpanRef asyncSpan = null;
                 try {
@@ -52,7 +37,6 @@ public class AsyncConfig {
                     asyncSpan.tag("parent.segmentId", parentSegmentId);
                     asyncSpan.tag("async.thread", Thread.currentThread().getName());
                     
-                    // Log context continuation
                     LOGGER.debug("[AsyncTask][Context continued][TraceID: {}][Thread: {}]",
                         TraceContext.traceId(), Thread.currentThread().getName());
                     
@@ -70,7 +54,6 @@ public class AsyncConfig {
                     throw e;
                 } finally {
                     if (asyncSpan != null) {
-                        // Ensure span is always closed
                         Tracer.stopSpan();
                     }
                 }

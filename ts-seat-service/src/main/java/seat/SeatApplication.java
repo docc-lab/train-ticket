@@ -26,10 +26,4 @@ public class SeatApplication {
     public static void main(String[] args) {
         SpringApplication.run(SeatApplication.class, args);
     }
-
-    @LoadBalanced
-    @Bean
-    public RestTemplate restTemplate(RestTemplateBuilder builder) {
-        return builder.build();
-    }
 }

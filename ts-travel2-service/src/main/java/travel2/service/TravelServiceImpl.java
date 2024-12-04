@@ -17,7 +17,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
-import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import org.springframework.cloud.client.circuitbreaker.CircuitBreaker;
 import org.springframework.cloud.circuitbreaker.resilience4j.Resilience4JCircuitBreakerFactory;
 
 import travel2.entity.AdminTrip;
@@ -28,6 +28,7 @@ import travel2.repository.TripRepository;
 
 import javax.transaction.Transactional;
 import java.util.*;
+
 
 
 /**
@@ -59,15 +60,22 @@ public class TravelServiceImpl implements TravelService {
     String noCnontent = "No Content";
 
     private ResponseEntity<Response> executeWithCircuitBreaker(String serviceName, String url, HttpMethod method, HttpEntity<?> request, ParameterizedTypeReference<Response> responseType) {
-        io.github.resilience4j.circuitbreaker.CircuitBreaker circuitBreaker = circuitBreakerFactory.create(serviceName).getCircuitBreaker();
+        CircuitBreaker circuitBreaker = circuitBreakerFactory.create(serviceName);
         
-        return Try.of(() -> 
-            restTemplate.exchange(url, method, request, responseType)
-        ).recover(throwable -> {
-            LOGGER.error("[CircuitBreaker][Service: {}][Error: {}]", serviceName, throwable.getMessage());
+        try {
+            return circuitBreaker.run(
+                () -> restTemplate.exchange(url, method, request, responseType),
+                throwable -> {
+                    LOGGER.error("[CircuitBreaker][Service: {}][Error: {}]", serviceName, throwable.getMessage());
+                    Response errorResponse = new Response<>(0, "Service temporarily unavailable: " + serviceName, null);
+                    return ResponseEntity.ok(errorResponse);
+                }
+            );
+        } catch (Exception e) {
+            LOGGER.error("[CircuitBreaker][Service: {}][Error: {}]", serviceName, e.getMessage());
             Response errorResponse = new Response<>(0, "Service temporarily unavailable: " + serviceName, null);
             return ResponseEntity.ok(errorResponse);
-        }).get();
+        }
     }
 
     private ResponseEntity<Response> handleFailure(String serviceName, Throwable throwable) {
@@ -268,7 +276,7 @@ public class TravelServiceImpl implements TravelService {
         List<TripResponse> responses = new ArrayList<>();
         //Determine if the date checked is the same day and after
         if (!afterToday(departureTime)) {
-            TravelServiceImpl.LOGGER.info("[getTickets][depaturetime not vailid][departuretime: {}]", departureTime);
+            TravelServiceImpl.LOGGER.info("[getTickets][depaturetime not valid][departuretime: {}]", departureTime);
             return responses;
         }
 
@@ -295,7 +303,7 @@ public class TravelServiceImpl implements TravelService {
                     basic_service_url + "/api/v1/basicservice/basic/travels",
                     HttpMethod.POST,
                     requestEntity,
-                    Response.class);
+                    new ParameterizedTypeReference<Response>() {});
 
             Response r = re.getBody();
             if(r.getStatus() == 0){
@@ -322,8 +330,8 @@ public class TravelServiceImpl implements TravelService {
             }
             return responses;
 
-        } catch (ServiceException e) {
-            LOGGER.warn("[getTicketsByBatch][Circuit breaker activated][{}]", e.getMessage());
+        } catch (Exception e) {
+            LOGGER.warn("[getTicketsByBatch][Service error][{}]", e.getMessage());
             return responses;
         }
     }
@@ -450,7 +458,8 @@ public class TravelServiceImpl implements TravelService {
         try {
             HttpEntity requestEntity = new HttpEntity(null);
             String train_service_url = getServiceUrl("ts-train-service");
-            ResponseEntity<Response<TrainType>> re = restTemplate.exchange(
+            ResponseEntity<Response<TrainType>> re = executeWithCircuitBreaker(
+                    "ts-train-service",
                     train_service_url + "/api/v1/trainservice/trains/byName/" + trainTypeName,
                     HttpMethod.GET,
                     requestEntity,

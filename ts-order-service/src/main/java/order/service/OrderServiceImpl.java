@@ -478,10 +478,10 @@ public class OrderServiceImpl implements OrderService {
 //        ArrayList<Order> orders = orderRepository.findByAccountId(accountId);
 //        int countOrderInOneHour = 0;
 //        int countTotalValidOrder = 0;
-//        Calendar ca = Calendar.getInstance();
-//        ca.setTime(dateFrom);
-//        ca.add(Calendar.HOUR_OF_DAY, -1);
-//        dateFrom = ca.getTime();
+        Calendar ca = Calendar.getInstance();
+        ca.setTime(dateFrom);
+        ca.add(Calendar.HOUR_OF_DAY, -1);
+        dateFrom = ca.getTime();
 //        for (Order order : orders) {
 //            if (order.getStatus() == OrderStatus.NOTPAID.getCode() ||
 //                    order.getStatus() == OrderStatus.PAID.getCode() ||
@@ -494,22 +494,26 @@ public class OrderServiceImpl implements OrderService {
 //            }
 //        }
 
-        ArrayList<Order> notPaidOrders = orderRepository
-                .findByAccountIdAndStatus(accountId,
-                        OrderStatus.NOTPAID.getCode());
-        ArrayList<Order> paidOrders = orderRepository
-                .findByAccountIdAndStatus(accountId,
-                        OrderStatus.PAID.getCode());
-        ArrayList<Order> collectedOrders = orderRepository
-                .findByAccountIdAndStatus(accountId,
-                        OrderStatus.COLLECTED.getCode());
+        long dfLong = dateFrom.getTime();
+        int dfInt = (int)dfLong;
+
+//        ArrayList<Order> notPaidOrders = orderRepository
+//                .findByAccountIdAndStatus(accountId,
+//                        OrderStatus.NOTPAID.getCode());
+//        ArrayList<Order> paidOrders = orderRepository
+//                .findByAccountIdAndStatus(accountId,
+//                        OrderStatus.PAID.getCode());
+//        ArrayList<Order> collectedOrders = orderRepository
+//                .findByAccountIdAndStatus(accountId,
+//                        OrderStatus.COLLECTED.getCode());
 
 //        result.setOrderNumInLastOneHour(countOrderInOneHour);
-        result.setOrderNumInLastOneHour(1);
+        result.setOrderNumInLastOneHour(1 + dfInt - dfInt);
 //        result.setOrderNumOfValidOrder(countTotalValidOrder);
-        result.setOrderNumOfValidOrder(
-                notPaidOrders.size() + paidOrders.size() + collectedOrders.size()
-        );
+//        result.setOrderNumOfValidOrder(
+//                notPaidOrders.size() + paidOrders.size() + collectedOrders.size()
+//        );
+        result.setOrderNumOfValidOrder(1);
         return new Response<>(1, "Check Security Success . ", result);
     }
 

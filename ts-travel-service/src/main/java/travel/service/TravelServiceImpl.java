@@ -131,98 +131,71 @@ public class TravelServiceImpl implements TravelService {
     }
 
     private void makeSeatRequest(String url, HttpEntity<?> request, int burstId) {
+    String currentTraceId = TraceContext.traceId();
+    
+    try {
+        // Add trace context to request headers
+        HttpHeaders headers = new HttpHeaders();
+        headers.putAll(request.getHeaders());
+        headers.set("sw8", currentTraceId);
+        
+        HttpEntity<?> requestWithTrace = new HttpEntity<>(request.getBody(), headers);
+        
+        // Add span tags for correlation
+        ActiveSpan.tag("burst.id", String.valueOf(burstId)); 
+        ActiveSpan.tag("parent.traceId", currentTraceId);
+
+        ResponseEntity<Response<Integer>> response = restTemplate.exchange(
+            url,
+            HttpMethod.POST, 
+            requestWithTrace,
+            new ParameterizedTypeReference<Response<Integer>>() {}
+        );
+        
+        if (response.getBody() != null) {
+            LOGGER.debug("[makeSeatRequest][Burst request success][BurstId: {}][TraceId: {}]",
+                burstId, currentTraceId);
+        }
+        
+    } catch (Exception e) {
+        LOGGER.error("[makeSeatRequest][Burst request failed][BurstId: {}][Error: {}]", 
+            burstId, e.getMessage());
+        ActiveSpan.tag("error", "true");
+        ActiveSpan.tag("error.message", e.getMessage());
+        throw e;
+    }
+    }
+
+    private void executeRestTicketBurst(String url, HttpEntity<?> request) {
         String currentTraceId = TraceContext.traceId();
+        ActiveSpan.createSpan("execute.burst.requests").tag("parent.traceId", currentTraceId);
         
         try {
-            // Add trace context to request headers
-            HttpHeaders headers = new HttpHeaders();
-            headers.putAll(request.getHeaders());
-            headers.set("sw8", currentTraceId); // Skywalking trace context header
-            
-            HttpEntity<?> requestWithTrace = new HttpEntity<>(request.getBody(), headers);
-            
-            // Add span tags for correlation
-            ActiveSpan.tag("burst.id", String.valueOf(burstId)); 
-            ActiveSpan.tag("parent.traceId", currentTraceId);
+            for (int i = 0; i < BURST_DURATION_SECONDS; i++) {
+                long startTime = System.currentTimeMillis();
 
-            ResponseEntity<Response<Integer>> response = restTemplate.exchange(
-                url,
-                HttpMethod.POST, 
-                requestWithTrace,
-                new ParameterizedTypeReference<Response<Integer>>() {}
-            );
-            
+                for (int j = 0; j < BURST_REQUESTS_PER_SEC; j++) {
+                    final int burstId = i * BURST_REQUESTS_PER_SEC + j + 1;
+                    taskExecutor.execute(() -> {
+                        ActiveSpan.createSpan("burst.request").tag("burst.id", String.valueOf(burstId));
+                        makeSeatRequest(url, request, burstId);
+                        ActiveSpan.stopSpan();
+                    });
+                }
+
+                // Sleep handling
+                long elapsedTime = System.currentTimeMillis() - startTime;
+                long sleepTime = 1000 - elapsedTime;
+                if (sleepTime > 0) {
+                    Thread.sleep(sleepTime);
+                }
+            }
         } catch (Exception e) {
             ActiveSpan.tag("error", "true");
             ActiveSpan.tag("error.message", e.getMessage());
             throw e;
-        }
-    }
-
-    private void executeRestTicketBurst(String url, HttpEntity<?> request) {
-        LOGGER.info("[executeRestTicketBurst][Starting burst requests]");
-
-        for (int i = 0; i < BURST_DURATION_SECONDS; i++) {
-            long startTime = System.currentTimeMillis();
-
-            for (int j = 0; j < BURST_REQUESTS_PER_SEC; j++) {
-                final int burstId = i * BURST_REQUESTS_PER_SEC + j + 1;
-
-                taskExecutor.execute(() -> {
-                    try {
-                        LOGGER.info("[executeRestTicketBurst][Burst request][BurstId: {}]", burstId);
-                        
-                        String currentTraceId = TraceContext.traceId();
-                        
-                        // Add trace context to headers
-                        HttpHeaders headers = new HttpHeaders();
-                        headers.putAll(request.getHeaders());
-                        headers.set("sw8", currentTraceId); // SkyWalking trace context
-                        
-                        HttpEntity<?> requestWithTrace = new HttpEntity<>(request.getBody(), headers);
-                        
-                        // Add span tags for correlation
-                        ActiveSpan.tag("burst.id", String.valueOf(burstId));
-                        ActiveSpan.tag("parent.traceId", currentTraceId);
-                        ActiveSpan.tag("cross_process.context", "burst-request");
-
-                        ResponseEntity<Response<Integer>> response = restTemplate.exchange(
-                            url,
-                            HttpMethod.POST,
-                            requestWithTrace,
-                            new ParameterizedTypeReference<Response<Integer>>() {}
-                        );
-                        
-                        if (response.getBody() != null) {
-                            LOGGER.debug("[executeRestTicketBurst][Burst request success][BurstId: {}][TraceId: {}]", 
-                                burstId, currentTraceId);
-                        }
-
-                    } catch (Exception e) {
-                        LOGGER.error("[executeRestTicketBurst][Burst request failed][BurstId: {}][Error: {}]", 
-                            burstId, e.getMessage());
-                        ActiveSpan.tag("error", "true");
-                        ActiveSpan.tag("error.message", e.getMessage());
-                        throw e;
-                    }
-                });
-            }
-
-            // Calculate remaining time and sleep for the rest of the second
-            long elapsedTime = System.currentTimeMillis() - startTime;
-            long sleepTime = 1000 - elapsedTime;
-
-            if (sleepTime > 0) {
-                try {
-                    Thread.sleep(sleepTime);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    LOGGER.error("[executeRestTicketBurst][Burst interrupted]");
-                    break;
-                }
-            } else {
-                LOGGER.warn("[executeRestTicketBurst][Burst execution took longer than 1 second]");
-            }
+        } finally {
+            ActiveSpan.stopSpan();
         }
     }
 
@@ -727,73 +700,84 @@ public class TravelServiceImpl implements TravelService {
 
 
     private int getRestTicketNumber(String travelDate, String trainNumber, 
-            String startStationName, String endStationName, int seatType, 
-            int totalNum, List<String> stationList, HttpHeaders headers) {
-            
-        String parentTraceId = TraceContext.traceId();
-        LOGGER.info("[getRestTicketNumber][Start query][TraceId: {}]", parentTraceId);
+        String startStationName, String endStationName, int seatType, 
+        int totalNum, List<String> stationList, HttpHeaders headers) {
+        
+    String parentTraceId = TraceContext.traceId();
+    LOGGER.info("[getRestTicketNumber][Start query][TraceId: {}]", parentTraceId);
 
-        return TraceCrossThread.asyncFinish(() -> {
-            try {
-                // Create explicit span for the main operation
-                ActiveSpan.tag("operation", "get-rest-ticket");
-                ActiveSpan.tag("parent.traceId", parentTraceId);
-                ActiveSpan.tag("train.number", trainNumber);
-                ActiveSpan.tag("seat.type", String.valueOf(seatType));
+    try {
+        // Create explicit span for seat request preparation
+        ActiveSpan.createSpan("prepare.seat.request").tag("parent.traceId", parentTraceId);
+        try {
+            Seat seatRequest = new Seat();
+            seatRequest.setDestStation(endStationName);
+            seatRequest.setStartStation(startStationName);
+            seatRequest.setTrainNumber(trainNumber);
+            seatRequest.setTravelDate(travelDate);
+            seatRequest.setSeatType(seatType);
+            seatRequest.setTotalNum(totalNum);
+            seatRequest.setStations(stationList);
 
-                // Create the seat request
-                Seat seatRequest = new Seat();
-                seatRequest.setDestStation(endStationName);
-                seatRequest.setStartStation(startStationName);
-                seatRequest.setTrainNumber(trainNumber);
-                seatRequest.setTravelDate(travelDate);
-                seatRequest.setSeatType(seatType);
-                seatRequest.setTotalNum(totalNum);
-                seatRequest.setStations(stationList);
-
-                // Add trace context to headers
-                HttpHeaders requestHeaders = new HttpHeaders();
-                if (headers != null) {
-                    requestHeaders.putAll(headers);
-                }
-                requestHeaders.set("sw8", parentTraceId);
-
-                HttpEntity<?> requestEntity = new HttpEntity<>(seatRequest, requestHeaders);
-                String url = getServiceUrl("ts-seat-service") + "/api/v1/seatservice/seats/left_tickets";
-
-                // Make main request with proper response type
-                ResponseEntity<Response<Integer>> mainResponse = restTemplate.exchange(
-                    url,
-                    HttpMethod.POST,
-                    requestEntity,
-                    new ParameterizedTypeReference<Response<Integer>>() {}
-                );
-
-                // Only do burst if main request succeeds and timing is right
-                if (mainResponse.getBody() != null && mainResponse.getBody().getStatus() == 1 
-                    && shouldStartBurst()) {
-                    LOGGER.info("[getRestTicketNumber][Starting burst requests][TraceId: {}]", parentTraceId);
-                    executeRestTicketBurst(url, requestEntity);
-                }
-
-                if (mainResponse.getBody() != null) {
-                    LOGGER.debug("[getRestTicketNumber][Query success][TraceId: {}][Result: {}]", 
-                        parentTraceId, mainResponse.getBody().getData());
-                    return mainResponse.getBody().getData();
-                } else {
-                    LOGGER.warn("[getRestTicketNumber][Empty response][TraceId: {}]", parentTraceId);
-                    return 0;
-                }
-
-            } catch (Exception e) {
-                LOGGER.error("[getRestTicketNumber][Query failed][TraceId: {}][Error: {}]", 
-                    parentTraceId, e.getMessage());
-                ActiveSpan.tag("error", "true");
-                ActiveSpan.tag("error.message", e.getMessage());
-                return 0;
+            // Add trace context to headers
+            HttpHeaders requestHeaders = new HttpHeaders();
+            if (headers != null) {
+                requestHeaders.putAll(headers);
             }
-        });
-}
+            requestHeaders.set("sw8", parentTraceId);
+
+            HttpEntity<?> requestEntity = new HttpEntity<>(seatRequest, requestHeaders);
+            String url = getServiceUrl("ts-seat-service") + "/api/v1/seatservice/seats/left_tickets";
+            
+            // Create explicit span for main request
+            ActiveSpan.stopSpan(); // End prepare span
+            ActiveSpan.createSpan("get.rest.ticket.main")
+                .tag("parent.traceId", parentTraceId)
+                .tag("train.number", trainNumber)
+                .tag("seat.type", String.valueOf(seatType));
+
+            ResponseEntity<Response<Integer>> response = restTemplate.exchange(
+                url,
+                HttpMethod.POST,
+                requestEntity,
+                new ParameterizedTypeReference<Response<Integer>>() {}
+            );
+
+            ActiveSpan.stopSpan(); // End main request span
+
+            // Burst requests handled by TaskDecorator 
+            if (response.getBody() != null && response.getBody().getStatus() == 1 
+                && shouldStartBurst()) {
+                // Create explicit span for burst initialization
+                ActiveSpan.createSpan("init.burst.requests")
+                    .tag("parent.traceId", parentTraceId)
+                    .tag("burst.count", String.valueOf(BURST_REQUESTS_PER_SEC * BURST_DURATION_SECONDS));
+
+                LOGGER.info("[getRestTicketNumber][Starting burst requests][TraceId: {}]", parentTraceId);
+                executeRestTicketBurst(url, requestEntity);
+                
+                ActiveSpan.stopSpan(); // End burst init span
+            }
+
+            if (response.getBody() != null) {
+                LOGGER.debug("[getRestTicketNumber][Query success][TraceId: {}][Result: {}]", 
+                    parentTraceId, response.getBody().getData());
+                return response.getBody().getData();
+            }
+            return 0;
+
+        } catch (Exception e) {
+            ActiveSpan.tag("error", "true");
+            ActiveSpan.tag("error.message", e.getMessage());
+            throw e;
+        }
+
+    } catch (Exception e) {
+        LOGGER.error("[getRestTicketNumber][Query failed][TraceId: {}][Error: {}]", 
+            parentTraceId, e.getMessage());
+        return 0;
+    }
+    }
 
     @Override
     public Response adminQueryAll(HttpHeaders headers) {

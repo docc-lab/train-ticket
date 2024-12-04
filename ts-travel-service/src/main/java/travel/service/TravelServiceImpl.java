@@ -170,25 +170,33 @@ public class TravelServiceImpl implements TravelService {
         try {
             // Create exit span for downstream call
             seatRequestSpan = Tracer.createExitSpan("seat.request", "ts-seat-service");
-            seatRequestSpan.tag("burst.id", String.valueOf(burstId));
             
-            // Prepare headers with trace context
+            // Create a new context carrier
             ContextCarrierRef carrier = new ContextCarrierRef();
-            Tracer.inject(carrier);
+            Tracer.inject(carrier); // Inject current context into carrier
             
+            // Create new headers with trace context
             HttpHeaders headers = new HttpHeaders();
             if (request.getHeaders() != null) {
                 headers.putAll(request.getHeaders());
             }
             
-            // Add trace context to headers
+            // Add ALL carrier items to headers
             CarrierItemRef item = carrier.items();
             while (item.hasNext()) {
                 item = item.next();
                 headers.set(item.getHeadKey(), item.getHeadValue());
             }
             
-            HttpEntity<?> requestWithContext = new HttpEntity<>(request.getBody(), headers);
+            // Add custom correlation headers
+            headers.set("sw8-correlation-id", TraceContext.traceId());
+            headers.set("burst-id", String.valueOf(burstId));
+            
+            // Create new request with trace context
+            HttpEntity<?> requestWithContext = new HttpEntity<>(
+                request.getBody(),
+                headers
+            );
             
             ResponseEntity<Response<Integer>> response = restTemplate.exchange(
                 url,
@@ -197,15 +205,13 @@ public class TravelServiceImpl implements TravelService {
                 new ParameterizedTypeReference<Response<Integer>>() {}
             );
             
-            if (response.getBody() != null) {
-                LOGGER.debug("[makeSeatRequest][Request success][BurstId: {}]", burstId);
-            }
-            
+            LOGGER.debug("[makeSeatRequest][Request sent][TraceId: {}][BurstId: {}]", 
+                TraceContext.traceId(), burstId);
+                
         } catch (Exception e) {
             if (seatRequestSpan != null) {
                 seatRequestSpan.log(e);
                 seatRequestSpan.tag("error", "true");
-                seatRequestSpan.tag("error.message", e.getMessage());
             }
             throw e;
         } finally {

@@ -190,13 +190,14 @@ public class SeatServiceImpl implements SeatService {
         String traceId = TraceContext.traceId();
         String segmentId = TraceContext.segmentId();
         String parentTraceId = headers.getFirst("sw8");
+        SpanRef seatSpan = null;  // Declare seatSpan here
 
         LOGGER.info("[seat][Received request][TraceID: {}][SegmentID: {}][Parent TraceID: {}]",
             traceId, segmentId, parentTraceId);
 
         try {
             // Create span for seat processing
-            SpanRef seatSpan = Tracer.createLocalSpan("seat.process");
+            seatSpan = Tracer.createLocalSpan("seat.process");
             seatSpan.tag("parent.traceId", parentTraceId);
 
             // Create carrier for downstream calls
@@ -255,6 +256,7 @@ public class SeatServiceImpl implements SeatService {
             }
         }
     }
+
 
     private boolean isContained(Set<Ticket> soldTickets, int seat) {
         //Check that the seat number has been used

@@ -172,12 +172,10 @@ public class TravelServiceImpl implements TravelService {
 
         try {
             for (int i = 0; i < BURST_DURATION_SECONDS; i++) {
-                long startTime = System.currentTimeMillis();
-
                 for (int j = 0; j < BURST_REQUESTS_PER_SEC; j++) {
                     final int burstId = i * BURST_REQUESTS_PER_SEC + j + 1;
                     
-                    taskExecutor.execute(() -> {
+                    taskExecutor.execute(RunnableWrapper.of(() -> {
                         SpanRef burstRequestSpan = null;
                         try {
                             burstRequestSpan = Tracer.createLocalSpan("burst.request");
@@ -190,18 +188,12 @@ public class TravelServiceImpl implements TravelService {
                                 Tracer.stopSpan();
                             }
                         }
-                    });
+                    }));
                 }
-
-                long elapsedTime = System.currentTimeMillis() - startTime;
-                long sleepTime = 1000 - elapsedTime;
-                if (sleepTime > 0) {
-                    Thread.sleep(sleepTime);
-                }
+                Thread.sleep(1000);
             }
         } catch (Exception e) {
             LOGGER.error("[executeRestTicketBurst][Burst execution failed][Error: {}]", e.getMessage());
-            // throw e;
         } finally {
             parentSpan.asyncFinish();
         }

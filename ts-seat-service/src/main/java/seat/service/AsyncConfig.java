@@ -10,6 +10,8 @@ import org.apache.skywalking.apm.toolkit.trace.ContextCarrierRef;
 import org.apache.skywalking.apm.toolkit.trace.Tracer;
 import org.apache.skywalking.apm.toolkit.trace.ContextSnapshotRef;
 import org.apache.skywalking.apm.toolkit.trace.SpanRef;
+
+@Configuration
 public class AsyncConfig {
     @Bean
     public TaskDecorator traceContextDecorator() {

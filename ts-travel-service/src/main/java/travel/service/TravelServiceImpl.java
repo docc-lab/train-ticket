@@ -131,58 +131,90 @@ public class TravelServiceImpl implements TravelService {
     }
 
     private void makeSeatRequest(String url, HttpEntity<?> request, int burstId) {
-    String currentTraceId = TraceContext.traceId();
-    
-    try {
-        // Add trace context to request headers
-        HttpHeaders headers = new HttpHeaders();
-        headers.putAll(request.getHeaders());
-        headers.set("sw8", currentTraceId);
+        SpanRef seatRequestSpan = null;
+        String currentTraceId = TraceContext.traceId();
         
-        HttpEntity<?> requestWithTrace = new HttpEntity<>(request.getBody(), headers);
-        
-        // Add span tags for correlation
-        ActiveSpan.tag("burst.id", String.valueOf(burstId)); 
-        ActiveSpan.tag("parent.traceId", currentTraceId);
+        try {
+            // Create isolated span for seat request
+            seatRequestSpan = Tracer.createExitSpan("seat.request", "ts-seat-service");
+            
+            // Add trace context to request headers
+            HttpHeaders headers = new HttpHeaders();
+            headers.putAll(request.getHeaders());
+            headers.set("sw8", currentTraceId);
+            
+            HttpEntity<?> requestWithTrace = new HttpEntity<>(request.getBody(), headers);
+            
+            // Add correlation tags
+            seatRequestSpan.tag("burst.id", String.valueOf(burstId)); 
+            seatRequestSpan.tag("parent.traceId", currentTraceId);
 
-        ResponseEntity<Response<Integer>> response = restTemplate.exchange(
-            url,
-            HttpMethod.POST, 
-            requestWithTrace,
-            new ParameterizedTypeReference<Response<Integer>>() {}
-        );
-        
-        if (response.getBody() != null) {
-            LOGGER.debug("[makeSeatRequest][Burst request success][BurstId: {}][TraceId: {}]",
-                burstId, currentTraceId);
+            ResponseEntity<Response<Integer>> response = restTemplate.exchange(
+                url,
+                HttpMethod.POST, 
+                requestWithTrace,
+                new ParameterizedTypeReference<Response<Integer>>() {}
+            );
+            
+            if (response.getBody() != null) {
+                LOGGER.debug("[makeSeatRequest][Burst request success][BurstId: {}][TraceId: {}]",
+                    burstId, currentTraceId);
+            }
+            
+        } catch (Exception e) {
+            LOGGER.error("[makeSeatRequest][Burst request failed][BurstId: {}][Error: {}]", 
+                burstId, e.getMessage());
+            if (seatRequestSpan != null) {
+                seatRequestSpan.log(e);
+                seatRequestSpan.tag("error", "true");
+                seatRequestSpan.tag("error.message", e.getMessage());
+            }
+            throw e;
+        } finally {
+            if (seatRequestSpan != null) {
+                Tracer.stopSpan();
+            }
         }
-        
-    } catch (Exception e) {
-        LOGGER.error("[makeSeatRequest][Burst request failed][BurstId: {}][Error: {}]", 
-            burstId, e.getMessage());
-        ActiveSpan.tag("error", "true");
-        ActiveSpan.tag("error.message", e.getMessage());
-        throw e;
-    }
     }
 
     private void executeRestTicketBurst(String url, HttpEntity<?> request, SpanRef parentSpan) {
         String currentTraceId = TraceContext.traceId();
-        ContextSnapshotRef contextSnapshot = Tracer.capture();
+        // Create root context for burst operation
+        ContextSnapshotRef burstContextSnapshot = Tracer.capture();
+        parentSpan.prepareForAsync(); // Keep parent span alive
 
         try {
             for (int i = 0; i < BURST_DURATION_SECONDS; i++) {
+                long startTime = System.currentTimeMillis();
+
                 for (int j = 0; j < BURST_REQUESTS_PER_SEC; j++) {
                     final int burstId = i * BURST_REQUESTS_PER_SEC + j + 1;
+                    
+                    // Create new context snapshot for each request
+                    ContextSnapshotRef requestContextSnapshot = Tracer.capture();
                     
                     taskExecutor.execute(RunnableWrapper.of(() -> {
                         SpanRef burstRequestSpan = null;
                         try {
+                            // Create isolated span for this request
                             burstRequestSpan = Tracer.createLocalSpan("burst.request");
-                            Tracer.continued(contextSnapshot);
+                            // Link to burst context
+                            Tracer.continued(requestContextSnapshot);
+                            
+                            // Add correlation tags
                             burstRequestSpan.tag("burst.id", String.valueOf(burstId));
+                            burstRequestSpan.tag("parent.traceId", currentTraceId);
+                            burstRequestSpan.tag("burst.group", String.valueOf(i));
+                            burstRequestSpan.tag("burst.sequence", String.valueOf(j));
                             
                             makeSeatRequest(url, request, burstId);
+                        } catch (Exception e) {
+                            if (burstRequestSpan != null) {
+                                burstRequestSpan.log(e);
+                                burstRequestSpan.tag("error", "true");
+                                burstRequestSpan.tag("error.message", e.getMessage());
+                            }
+                            throw e;
                         } finally {
                             if (burstRequestSpan != null) {
                                 Tracer.stopSpan();
@@ -190,7 +222,13 @@ public class TravelServiceImpl implements TravelService {
                         }
                     }));
                 }
-                Thread.sleep(1000);
+
+                // Maintain burst rate
+                long elapsedTime = System.currentTimeMillis() - startTime;
+                long sleepTime = 1000 - elapsedTime;
+                if (sleepTime > 0) {
+                    Thread.sleep(sleepTime);
+                }
             }
         } catch (Exception e) {
             LOGGER.error("[executeRestTicketBurst][Burst execution failed][Error: {}]", e.getMessage());

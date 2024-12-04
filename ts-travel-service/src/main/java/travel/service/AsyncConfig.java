@@ -11,25 +11,31 @@ import org.apache.skywalking.apm.toolkit.trace.ContextCarrierRef;
 import org.apache.skywalking.apm.toolkit.trace.Tracer;
 import org.apache.skywalking.apm.toolkit.trace.ContextSnapshotRef;
 
+
 @Configuration
 public class AsyncConfig {
-
     @Bean
     public TaskDecorator traceContextDecorator() {
         return runnable -> {
+            // Capture all current context information
             String parentTraceId = TraceContext.traceId();
             ContextSnapshotRef contextSnapshot = Tracer.capture();
             
             return RunnableWrapper.of(() -> {
+                SpanRef asyncSpan = null;
                 try {
-                    // Restore the trace context
+                    // Create new isolated span for async work
+                    asyncSpan = Tracer.createLocalSpan("async.task");
+                    // Link to parent context
                     Tracer.continued(contextSnapshot);
                     ActiveSpan.tag("parent.traceId", parentTraceId);
+                    ActiveSpan.tag("async.thread", Thread.currentThread().getName());
+                    
                     runnable.run();
-                } catch (Exception e) {
-                    ActiveSpan.tag("error", "true");
-                    ActiveSpan.tag("error.message", e.getMessage());
-                    throw e;
+                } finally {
+                    if (asyncSpan != null) {
+                        Tracer.stopSpan();
+                    }
                 }
             });
         };

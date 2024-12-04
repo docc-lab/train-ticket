@@ -168,45 +168,48 @@ public class TravelServiceImpl implements TravelService {
     private void makeSeatRequest(String url, HttpEntity<?> request, int burstId) {
         SpanRef seatRequestSpan = null;
         try {
-            // Get current context before creating new spans
+            // Get current trace context before making the request
             String currentTraceId = TraceContext.traceId();
-            
+            String currentSegmentId = TraceContext.segmentId();
+
             // Create exit span with proper references
             seatRequestSpan = Tracer.createExitSpan("seat.request", "ts-seat-service");
             seatRequestSpan.tag("burst.id", String.valueOf(burstId));
             seatRequestSpan.tag("parent.traceId", currentTraceId);
+            seatRequestSpan.tag("parent.segmentId", currentSegmentId);
 
-            // Create new carrier for downstream propagation
+            // Create carrier and inject trace context
             ContextCarrierRef carrier = new ContextCarrierRef();
             Tracer.inject(carrier);
 
-            // Create new headers preserving original ones
+            // Build headers with trace context
             HttpHeaders headers = new HttpHeaders();
             if (request.getHeaders() != null) {
                 headers.putAll(request.getHeaders());
             }
 
-            // Add SW8 context headers
+            // Add critical trace headers
+            headers.set("sw8", currentTraceId); 
             CarrierItemRef item = carrier.items();
             while (item.hasNext()) {
                 item = item.next();
                 String key = item.getHeadKey();
                 String value = item.getHeadValue();
                 headers.set(key, value);
-                LOGGER.debug("[makeSeatRequest][Adding trace header][Key: {}][Value: {}]", key, value);
+                LOGGER.debug("[makeSeatRequest][Adding trace header][BurstID: {}][Key: {}][Value: {}]",
+                    burstId, key, value);
             }
 
-            // Ensure SW8 correlation ID is set
-            headers.set("sw8-correlation-id", currentTraceId);
-            
+            // Create request with enhanced headers
             HttpEntity<?> requestWithContext = new HttpEntity<>(
                 request.getBody(),
                 headers
             );
 
-            LOGGER.info("[makeSeatRequest][Sending request][BurstID: {}][TraceID: {}]", 
-                burstId, currentTraceId);
+            LOGGER.info("[makeSeatRequest][Sending request][BurstID: {}][TraceID: {}][SegmentID: {}]",
+                burstId, currentTraceId, currentSegmentId);
 
+            // Make the request with trace context
             ResponseEntity<Response<Integer>> response = restTemplate.exchange(
                 url,
                 HttpMethod.POST,
@@ -214,14 +217,16 @@ public class TravelServiceImpl implements TravelService {
                 new ParameterizedTypeReference<Response<Integer>>() {}
             );
 
-            LOGGER.info("[makeSeatRequest][Request complete][BurstID: {}]", burstId);
+            LOGGER.debug("[makeSeatRequest][Request complete][BurstID: {}][Response: {}]",
+                burstId, response.getStatusCode());
 
         } catch (Exception e) {
-            LOGGER.error("[makeSeatRequest][Request failed][BurstID: {}][Error: {}]", 
-                burstId, e.getMessage());
+            LOGGER.error("[makeSeatRequest][Request failed][BurstID: {}][Error: {}]",
+                burstId, e.getMessage(), e);
             if (seatRequestSpan != null) {
                 seatRequestSpan.log(e);
                 seatRequestSpan.tag("error", "true");
+                seatRequestSpan.tag("error.message", e.getMessage());
             }
             throw e;
         } finally {
